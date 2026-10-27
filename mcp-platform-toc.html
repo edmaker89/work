@@ -1,0 +1,75 @@
+<div class="toc">
+<ul>
+<li><a href="#plataforma-mcp-model-context-protocol-pesquisa-servico-baseado-em-freshservice">Plataforma MCP (Model Context Protocol) — Pesquisa: Serviço Baseado em Freshservice</a><ul>
+<li><a href="#1-visao-geral-oportunidade-freshservice-focused">1. Visão Geral &amp; Oportunidade (Freshservice-Focused)</a></li>
+<li><a href="#2-arquitetura-de-referencia-freshservice-mcp-platform">2. Arquitetura de Referência (Freshservice MCP Platform)</a><ul>
+<li><a href="#componentes-chave-freshservice-specific">Componentes-chave (Freshservice-specific)</a></li>
+</ul>
+</li>
+<li><a href="#3-freshservice-mcp-server-tools-capabilities">3. Freshservice MCP Server — Tools &amp; Capabilities</a><ul>
+<li><a href="#tool-definitions-mcp-spec">Tool Definitions (MCP Spec)</a></li>
+</ul>
+</li>
+<li><a href="#4-modelo-de-isolamento-um-mcp-server-por-ambiente-sandboxprod">4. Modelo de Isolamento: Um MCP Server por Ambiente (Sandbox/Prod)</a></li>
+<li><a href="#5-obot-skill-registration-detalhado">5. Obot — Skill Registration Detalhado</a></li>
+<li><a href="#6-validacao-inicial-em-vps-sem-kubernetes">6. Validação Inicial em VPS (Sem Kubernetes)</a><ul>
+<li><a href="#stack-minima-docker-compose">Stack Mínima (Docker Compose)</a></li>
+<li><a href="#o-que-perde-na-vps-recupera-no-k8s-depois">O que perde na VPS (recupera no K8s depois)</a></li>
+<li><a href="#migracao-vps-k8s-quando-chegar-a-hora">Migração VPS → K8s (quando chegar a hora)</a></li>
+</ul>
+</li>
+<li><a href="#7-stacks-de-tecnologia-linguagens-sugeridas">7. Stacks de Tecnologia &amp; Linguagens Sugeridas</a><ul>
+<li><a href="#decisao-go-vs-typescript-no-control-plane">Decisão Go vs TypeScript no Control Plane</a></li>
+</ul>
+</li>
+<li><a href="#8-monorepo-vs-multi-repo-estrategia-para-multiplos-mcp-servers">8. Monorepo vs Multi-repo — Estratégia para Múltiplos MCP Servers</a><ul>
+<li><a href="#cenario-plataforma-comeca-com-freshservice-depois-adiciona-jira-mcp-server-postgresql-mcp-server-n8n-mcp-server-etc">Cenário: Plataforma começa com Freshservice, depois adiciona Jira MCP Server, PostgreSQL MCP Server, n8n MCP Server, etc.</a></li>
+<li><a href="#estrutura-hibrida-pratica">Estrutura Híbrida Prática</a></li>
+</ul>
+</li>
+<li><a href="#9-padroes-de-multi-tenancy-para-freshservice-mcp-atualizado">9. Padrões de Multi-Tenancy para Freshservice MCP (Atualizado)</a><ul>
+<li><a href="#recomendacao-por-tier-freshservice">Recomendação por Tier (Freshservice)</a></li>
+</ul>
+</li>
+<li><a href="#10-modelo-de-billing-monetizacao-freshservice-mcp">10. Modelo de Billing &amp; Monetização (Freshservice MCP)</a><ul>
+<li><a href="#tabela-de-precos-exemplo-brl-freshservice">Tabela de Preços (Exemplo BRL - Freshservice)</a></li>
+<li><a href="#metricas-de-uso-metering-events-freshservice">Métricas de Uso (Metering Events - Freshservice)</a></li>
+</ul>
+</li>
+<li><a href="#11-autenticacao-sso-tokens-oauth-21-pkce-freshservice">11. Autenticação, SSO &amp; Tokens — OAuth 2.1 + PKCE (Freshservice)</a><ul>
+<li><a href="#arquitetura-de-auth-freshservice-mcp">Arquitetura de Auth (Freshservice MCP)</a></li>
+<li><a href="#fluxo-oauth-21-pkce-freshservice-integration-por-ambiente">Fluxo OAuth 2.1 + PKCE — Freshservice Integration (por Ambiente)</a></li>
+<li><a href="#estrutura-de-tokens-jwt-access-token-exemplo">Estrutura de Tokens (JWT) — Access Token Exemplo</a></li>
+<li><a href="#rotacao-revogacao-freshservice-oauth">Rotação &amp; Revogação (Freshservice OAuth)</a></li>
+<li><a href="#multi-tenant-auth-patterns-freshservice-context">Multi-Tenant Auth Patterns (Freshservice Context)</a></li>
+</ul>
+</li>
+<li><a href="#12-isolamento-de-dados-seguranca-freshservice-focus">12. Isolamento de Dados &amp; Segurança (Freshservice Focus)</a><ul>
+<li><a href="#checklist-de-conformidade-lgpd-soc-2-type-ii-freshservice">Checklist de Conformidade (LGPD / SOC 2 Type II - Freshservice)</a></li>
+</ul>
+</li>
+<li><a href="#13-bases-tecnicas-recomendadas-gatewayruntime-para-freshservice-mcp">13. Bases Técnicas Recomendadas (Gateway/Runtime para Freshservice MCP)</a><ul>
+<li><a href="#minha-recomendacao-obot-open-source-control-plane-proprio-freshservice-mcp-server-custom">Minha Recomendação: Obot (Open Source) + Control Plane Próprio + Freshservice MCP Server Custom</a></li>
+</ul>
+</li>
+<li><a href="#14-registry-catalog-strategy-freshservice-mcp-server-versions">14. Registry &amp; Catalog Strategy (Freshservice MCP Server Versions)</a><ul>
+<li><a href="#versionamento-do-freshservice-mcp-server">Versionamento do Freshservice MCP Server</a></li>
+</ul>
+</li>
+<li><a href="#15-roadmap-de-implementacao-16-semanas-freshservice-mcp-platform">15. Roadmap de Implementação (16 Semanas - Freshservice MCP Platform)</a><ul>
+<li><a href="#marcos-entregaveis-freshservice">Marcos &amp; Entregáveis (Freshservice)</a></li>
+</ul>
+</li>
+<li><a href="#16-referencias-fontes-freshservice-mcp">16. Referências &amp; Fontes (Freshservice + MCP)</a><ul>
+<li><a href="#especificacao-documentacao-oficial">Especificação &amp; Documentação Oficial</a></li>
+<li><a href="#plataformas-gateways-analise-comparativa">Plataformas &amp; Gateways (Análise Comparativa)</a></li>
+<li><a href="#artigos-tecnicos-benchmarks">Artigos Técnicos &amp; Benchmarks</a></li>
+<li><a href="#compliance-security">Compliance &amp; Security</a></li>
+<li><a href="#ferramentas-de-apoio">Ferramentas de Apoio</a></li>
+</ul>
+</li>
+<li><a href="#17-proximos-passos-imediatos-esta-semana-freshservice-mcp-em-vps">17. Próximos Passos Imediatos (Esta Semana - Freshservice MCP em VPS)</a></li>
+</ul>
+</li>
+</ul>
+</div>

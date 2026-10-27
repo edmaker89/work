@@ -1,0 +1,749 @@
+<h1 id="plataforma-mcp-managed-control-plane-pesquisa-para-construcao-de-servico-proprio">Plataforma MCP (Managed Control Plane) — Pesquisa para Construção de Serviço Próprio</h1>
+<blockquote>
+<p><strong>Objetivo</strong>: Estruturar uma plataforma MCP multi-tenant para oferecer como serviço (B2B), com billing, autenticação/SSO, tokens, isolamento de dados e provisionamento self-service.</p>
+</blockquote>
+<hr />
+<h2 id="1-visao-geral-oportunidade">1. Visão Geral &amp; Oportunidade</h2>
+<table>
+<thead>
+<tr>
+<th>Aspecto</th>
+<th>Detalhamento</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Definição</strong></td>
+<td>Control Plane gerenciado que provisiona, opera e cobra <em>data planes</em> de identidade (AuthN/AuthZ) por tenant.</td>
+</tr>
+<tr>
+<td><strong>Público-alvo</strong></td>
+<td>SaaS B2B, ISVs, agências digitais, empresas com múltiplos produtos/clientes que precisam de SSO, MFA, SCIM, audit logs sem montar infra própria.</td>
+</tr>
+<tr>
+<td><strong>Diferenciais vs. Auth0/Okta</strong></td>
+<td>Preço previsível (flat + MAU), white-label total, data residency (LGPD), onboarding self-service via API, integração nativa com stack do cliente (n8n, Supabase, etc.).</td>
+</tr>
+<tr>
+<td><strong>Modelo de negócio</strong></td>
+<td><strong>Plataforma</strong> (control plane) + <strong>Data Planes</strong> dedicados ou compartilhados por tier. Receita: subscription base + overage MAU + add-ons (MFA, SCIM, SIEM streaming, custom domains).</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="2-arquitetura-de-referencia">2. Arquitetura de Referência</h2>
+<div class="highlight"><pre><span></span><code><span class="n">flowchart</span><span class="w"> </span><span class="n">TB</span>
+<span class="w">    </span><span class="n">subgraph</span><span class="w"> </span><span class="n">CP</span><span class="p">[</span><span class="n">Control</span><span class="w"> </span><span class="n">Plane</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="n">SaaS</span><span class="w"> </span><span class="n">Operator</span><span class="p">]</span>
+<span class="w">        </span><span class="n">API</span><span class="p">[</span><span class="n">API</span><span class="w"> </span><span class="n">Gateway</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="n">Control</span><span class="w"> </span><span class="n">API</span><span class="err">\</span><span class="n">n</span><span class="p">(</span><span class="n">REST</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">GraphQL</span><span class="p">)]</span>
+<span class="w">        </span><span class="n">PM</span><span class="p">[</span><span class="n">Provisioning</span><span class="w"> </span><span class="n">Manager</span><span class="err">\</span><span class="n">n</span><span class="p">(</span><span class="n">Tenant</span><span class="w"> </span><span class="n">lifecycle</span><span class="p">)]</span>
+<span class="w">        </span><span class="n">BM</span><span class="p">[</span><span class="n">Billing</span><span class="w"> </span><span class="o">&amp;</span><span class="w"> </span><span class="n">Metering</span><span class="err">\</span><span class="n">n</span><span class="p">(</span><span class="n">MAU</span><span class="p">,</span><span class="w"> </span><span class="n">API</span><span class="w"> </span><span class="n">calls</span><span class="p">,</span><span class="w"> </span><span class="n">add</span><span class="o">-</span><span class="n">ons</span><span class="p">)]</span>
+<span class="w">        </span><span class="n">AM</span><span class="p">[</span><span class="n">AuthZ</span><span class="w"> </span><span class="n">Policy</span><span class="w"> </span><span class="n">Engine</span><span class="err">\</span><span class="n">n</span><span class="p">(</span><span class="n">OPA</span><span class="o">/</span><span class="n">Cedar</span><span class="p">)]</span>
+<span class="w">        </span><span class="n">UI</span><span class="p">[</span><span class="n">Admin</span><span class="w"> </span><span class="n">Console</span><span class="err">\</span><span class="n">n</span><span class="p">(</span><span class="n">React</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">Tailwind</span><span class="p">)]</span>
+<span class="w">        </span><span class="n">DB</span><span class="p">[(</span><span class="n">PostgreSQL</span><span class="err">\</span><span class="n">nControl</span><span class="w"> </span><span class="n">Plane</span><span class="w"> </span><span class="n">DB</span><span class="p">)]</span>
+<span class="w">    </span><span class="kd">end</span>
+
+<span class="w">    </span><span class="n">subgraph</span><span class="w"> </span><span class="n">DP</span><span class="p">[</span><span class="kt">Data</span><span class="w"> </span><span class="n">Plane</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="n">Tenant</span><span class="w"> </span><span class="n">Isolation</span><span class="p">]</span>
+<span class="w">        </span><span class="n">direction</span><span class="w"> </span><span class="n">TB</span>
+<span class="w">        </span><span class="n">subgraph</span><span class="w"> </span><span class="n">T1</span><span class="p">[</span><span class="n">Tenant</span><span class="w"> </span><span class="n">A</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="n">Dedicated</span><span class="p">]</span>
+<span class="w">            </span><span class="n">K1</span><span class="p">[</span><span class="n">Keycloak</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="n">SuperTokens</span><span class="w"> </span><span class="n">Core</span><span class="p">]</span>
+<span class="w">            </span><span class="n">R1</span><span class="p">[(</span><span class="n">PostgreSQL</span><span class="err">\</span><span class="n">nTenant</span><span class="w"> </span><span class="n">A</span><span class="p">)]</span>
+<span class="w">            </span><span class="n">R1r</span><span class="p">[(</span><span class="n">Redis</span><span class="err">\</span><span class="n">nSessions</span><span class="o">/</span><span class="n">Tokens</span><span class="p">)]</span>
+<span class="w">        </span><span class="kd">end</span>
+<span class="w">        </span><span class="n">subgraph</span><span class="w"> </span><span class="n">T2</span><span class="p">[</span><span class="n">Tenant</span><span class="w"> </span><span class="n">B</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="kr">Shared</span><span class="w"> </span><span class="n">Pool</span><span class="p">]</span>
+<span class="w">            </span><span class="n">K2</span><span class="p">[</span><span class="n">Keycloak</span><span class="w"> </span><span class="n">Cluster</span><span class="err">\</span><span class="n">nMulti</span><span class="o">-</span><span class="n">realm</span><span class="p">]</span>
+<span class="w">            </span><span class="n">R2</span><span class="p">[(</span><span class="n">PostgreSQL</span><span class="err">\</span><span class="n">nShared</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nf">Row</span><span class="w"> </span><span class="n">Level</span><span class="w"> </span><span class="n">Security</span><span class="p">)]</span>
+<span class="w">            </span><span class="n">R2r</span><span class="p">[(</span><span class="n">Redis</span><span class="w"> </span><span class="n">Cluster</span><span class="p">)]</span>
+<span class="w">        </span><span class="kd">end</span>
+<span class="w">        </span><span class="n">subgraph</span><span class="w"> </span><span class="n">T3</span><span class="p">[</span><span class="n">Tenant</span><span class="w"> </span><span class="n">C</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="n">BYOC</span><span class="p">]</span>
+<span class="w">            </span><span class="n">K3</span><span class="p">[</span><span class="n">Keycloak</span><span class="w"> </span><span class="n">on</span><span class="w"> </span><span class="n">Customer</span><span class="w"> </span><span class="n">VPC</span><span class="p">]</span>
+<span class="w">            </span><span class="n">R3</span><span class="p">[(</span><span class="n">Customer</span><span class="w"> </span><span class="n">DB</span><span class="p">)]</span>
+<span class="w">            </span><span class="n">VPN</span><span class="p">[</span><span class="n">VPN</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="n">PrivateLink</span><span class="p">]</span>
+<span class="w">        </span><span class="kd">end</span>
+<span class="w">    </span><span class="kd">end</span>
+
+<span class="w">    </span><span class="n">API</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">PM</span>
+<span class="w">    </span><span class="n">PM</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">K1</span>
+<span class="w">    </span><span class="n">PM</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">K2</span>
+<span class="w">    </span><span class="n">PM</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">VPN</span>
+<span class="w">    </span><span class="n">BM</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">API</span>
+<span class="w">    </span><span class="n">AM</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">API</span>
+<span class="w">    </span><span class="n">UI</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">API</span>
+<span class="w">    </span><span class="n">DB</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">API</span>
+</code></pre></div>
+
+<h3 id="componentes-chave">Componentes-chave</h3>
+<table>
+<thead>
+<tr>
+<th>Componente</th>
+<th>Tecnologia Sugerida</th>
+<th>Responsabilidade</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>API Gateway</strong></td>
+<td>Kong / Traefik / AWS API GW</td>
+<td>Rate limit, authZ, observabilidade</td>
+</tr>
+<tr>
+<td><strong>Provisioning Manager</strong></td>
+<td>Go / TypeScript (Temporal)</td>
+<td>Cria realm/schema/DB, gera client secrets, configura DNS, emite webhook de <em>tenant.ready</em></td>
+</tr>
+<tr>
+<td><strong>Billing &amp; Metering</strong></td>
+<td>Stripe Billing + Stripe Metering / Lago / OpenMeter</td>
+<td>MAU tracking, invoice, usage-based overage, trials, coupons</td>
+</tr>
+<tr>
+<td><strong>Policy Engine</strong></td>
+<td>OPA (Rego) ou Cedar</td>
+<td>RBAC/ABAC centralizado, eval em &lt;5ms</td>
+</tr>
+<tr>
+<td><strong>Admin Console</strong></td>
+<td>React + React-Admin / Refine</td>
+<td>Self-service: criar tenant, ver logs, rotacionar segredos, configurar IdP (SAML/OIDC)</td>
+</tr>
+<tr>
+<td><strong>Data Plane Runtime</strong></td>
+<td>Keycloak (Quarkus) <strong>ou</strong> SuperTokens Core <strong>ou</strong> Ory Kratos + Hydra</td>
+<td>Executa login, emite tokens, mantém sessões</td>
+</tr>
+<tr>
+<td><strong>Armazenamento Tenant</strong></td>
+<td>PostgreSQL (RLS) <strong>ou</strong> DB dedicado <strong>ou</strong> BYOC</td>
+<td>Isolamento físico ou lógico conforme tier</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="3-padroes-de-multi-tenancy">3. Padrões de Multi-Tenancy</h2>
+<div class="highlight"><pre><span></span><code><span class="nx">graph</span><span class="w"> </span><span class="nx">LR</span>
+<span class="w">    </span><span class="nx">A</span><span class="p">[</span><span class="nx">Multi</span><span class="o">-</span><span class="nx">Tenancy</span><span class="w"> </span><span class="nx">Strategy</span><span class="p">]</span><span class="w"> </span><span class="o">--</span><span class="p">&gt;</span><span class="w"> </span><span class="nx">B</span><span class="p">[</span><span class="nx">Shared</span><span class="w"> </span><span class="nx">Database</span><span class="err">\</span><span class="nx">n</span><span class="o">+</span><span class="w"> </span><span class="nx">Row</span><span class="w"> </span><span class="nx">Level</span><span class="w"> </span><span class="nx">Security</span><span class="p">]</span>
+<span class="w">    </span><span class="nx">A</span><span class="w"> </span><span class="o">--</span><span class="p">&gt;</span><span class="w"> </span><span class="nx">C</span><span class="p">[</span><span class="nx">Shared</span><span class="w"> </span><span class="nx">Schema</span><span class="err">\</span><span class="nx">n</span><span class="o">+</span><span class="w"> </span><span class="nx">tenant_id</span><span class="w"> </span><span class="nx">column</span><span class="p">]</span>
+<span class="w">    </span><span class="nx">A</span><span class="w"> </span><span class="o">--</span><span class="p">&gt;</span><span class="w"> </span><span class="nx">D</span><span class="p">[</span><span class="nx">Schema</span><span class="w"> </span><span class="nx">per</span><span class="w"> </span><span class="nx">Tenant</span><span class="err">\</span><span class="nx">n</span><span class="p">(</span><span class="nx">PostgreSQL</span><span class="w"> </span><span class="nx">schemas</span><span class="p">)]</span>
+<span class="w">    </span><span class="nx">A</span><span class="w"> </span><span class="o">--</span><span class="p">&gt;</span><span class="w"> </span><span class="nx">E</span><span class="p">[</span><span class="nx">Database</span><span class="w"> </span><span class="nx">per</span><span class="w"> </span><span class="nx">Tenant</span><span class="err">\</span><span class="nx">n</span><span class="p">(</span><span class="nx">Dedicated</span><span class="w"> </span><span class="nx">PG</span><span class="p">)]</span>
+<span class="w">    </span><span class="nx">A</span><span class="w"> </span><span class="o">--</span><span class="p">&gt;</span><span class="w"> </span><span class="nx">F</span><span class="p">[</span><span class="nx">BYOC</span><span class="err">\</span><span class="nx">nCustomer</span><span class="w"> </span><span class="nx">VPC</span><span class="p">]</span>
+
+<span class="w">    </span><span class="nx">B</span><span class="w"> </span><span class="o">--</span><span class="p">&gt;</span><span class="w"> </span><span class="nx">B1</span><span class="p">[</span><span class="nx">Baixo</span><span class="w"> </span><span class="nx">custo</span><span class="err">\</span><span class="nx">nAlta</span><span class="w"> </span><span class="nx">densidade</span><span class="err">\</span><span class="nx">nRisco</span><span class="p">:</span><span class="w"> </span><span class="nx">query</span><span class="w"> </span><span class="nx">leak</span><span class="p">]</span>
+<span class="w">    </span><span class="nx">C</span><span class="w"> </span><span class="o">--</span><span class="p">&gt;</span><span class="w"> </span><span class="nx">C1</span><span class="p">[</span><span class="nx">Simples</span><span class="err">\</span><span class="nx">nMigração</span><span class="w"> </span><span class="nx">fácil</span><span class="err">\</span><span class="nx">nIsolamento</span><span class="w"> </span><span class="nx">médio</span><span class="p">]</span>
+<span class="w">    </span><span class="nx">D</span><span class="w"> </span><span class="o">--</span><span class="p">&gt;</span><span class="w"> </span><span class="nx">D1</span><span class="p">[</span><span class="nx">Isolamento</span><span class="w"> </span><span class="nx">forte</span><span class="err">\</span><span class="nx">nDDL</span><span class="w"> </span><span class="nx">por</span><span class="w"> </span><span class="nx">tenant</span><span class="err">\</span><span class="nx">nOperação</span><span class="w"> </span><span class="nx">complexa</span><span class="p">]</span>
+<span class="w">    </span><span class="nx">E</span><span class="w"> </span><span class="o">--</span><span class="p">&gt;</span><span class="w"> </span><span class="nx">E1</span><span class="p">[</span><span class="nx">Isolamento</span><span class="w"> </span><span class="nx">total</span><span class="err">\</span><span class="nx">nCusto</span><span class="w"> </span><span class="nx">alto</span><span class="err">\</span><span class="nx">nCompliance</span><span class="w"> </span><span class="nx">fácil</span><span class="p">]</span>
+<span class="w">    </span><span class="nx">F</span><span class="w"> </span><span class="o">--</span><span class="p">&gt;</span><span class="w"> </span><span class="nx">F1</span><span class="p">[</span><span class="nx">Data</span><span class="w"> </span><span class="nx">residency</span><span class="err">\</span><span class="nx">nCliente</span><span class="w"> </span><span class="nx">controla</span><span class="err">\</span><span class="nx">nSuporte</span><span class="w"> </span><span class="nx">complexo</span><span class="p">]</span>
+</code></pre></div>
+
+<h3 id="recomendacao-por-tier">Recomendação por Tier</h3>
+<table>
+<thead>
+<tr>
+<th>Tier</th>
+<th>Estratégia</th>
+<th>SLA</th>
+<th>Preço Base</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Starter</strong></td>
+<td>Shared DB + RLS</td>
+<td>99.5%</td>
+<td>R$ 299/mês (até 5k MAU)</td>
+</tr>
+<tr>
+<td><strong>Professional</strong></td>
+<td>Schema per Tenant</td>
+<td>99.9%</td>
+<td>R$ 999/mês (até 25k MAU)</td>
+</tr>
+<tr>
+<td><strong>Enterprise</strong></td>
+<td>DB dedicado + HA</td>
+<td>99.95%</td>
+<td>R$ 3.999/mês (até 100k MAU)</td>
+</tr>
+<tr>
+<td><strong>Dedicated/BYOC</strong></td>
+<td>BYOC (Keycloak em VPC cliente)</td>
+<td>Custom</td>
+<td>Sob consulta</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="4-modelo-de-billing-monetizacao">4. Modelo de Billing &amp; Monetização</h2>
+<div class="highlight"><pre><span></span><code><span class="n">sequenceDiagram</span>
+<span class="w">    </span><span class="n">participant</span><span class="w"> </span><span class="n">Customer</span>
+<span class="w">    </span><span class="n">participant</span><span class="w"> </span><span class="n">Console</span>
+<span class="w">    </span><span class="n">participant</span><span class="w"> </span><span class="n">API</span>
+<span class="w">    </span><span class="n">participant</span><span class="w"> </span><span class="n">Stripe</span>
+<span class="w">    </span><span class="n">participant</span><span class="w"> </span><span class="n">Metering</span>
+<span class="w">    </span><span class="n">Customer</span><span class="o">-&gt;&gt;</span><span class="n">Console</span><span class="o">:</span><span class="w"> </span><span class="n">Cria</span><span class="w"> </span><span class="n">tenant</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="n">escolhe</span><span class="w"> </span><span class="n">plano</span>
+<span class="w">    </span><span class="n">Console</span><span class="o">-&gt;&gt;</span><span class="n">API</span><span class="o">:</span><span class="w"> </span><span class="n">POST</span><span class="w"> </span><span class="o">/</span><span class="n">tenants</span><span class="w"> </span><span class="p">{</span><span class="n">plan</span><span class="p">,</span><span class="w"> </span><span class="n">tier</span><span class="p">}</span>
+<span class="w">    </span><span class="n">API</span><span class="o">-&gt;&gt;</span><span class="n">Provisioning</span><span class="o">:</span><span class="w"> </span><span class="n">Provisiona</span><span class="w"> </span><span class="kt">data</span><span class="w"> </span><span class="n">plane</span>
+<span class="w">    </span><span class="n">API</span><span class="o">-&gt;&gt;</span><span class="n">Stripe</span><span class="o">:</span><span class="w"> </span><span class="n">Create</span><span class="w"> </span><span class="n">subscription</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">meter</span><span class="w"> </span><span class="p">(</span><span class="n">MAU</span><span class="p">)</span>
+<span class="w">    </span><span class="n">Provisioning</span><span class="o">--&gt;&gt;</span><span class="n">API</span><span class="o">:</span><span class="w"> </span><span class="n">tenant_id</span><span class="p">,</span><span class="w"> </span><span class="n">realm</span><span class="p">,</span><span class="w"> </span><span class="n">client_secret</span>
+<span class="w">    </span><span class="n">API</span><span class="o">--&gt;&gt;</span><span class="n">Console</span><span class="o">:</span><span class="w"> </span><span class="n">Tenant</span><span class="w"> </span><span class="n">pronto</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">credenciais</span>
+<span class="w">    </span><span class="nf">loop</span><span class="w"> </span><span class="n">Mensal</span>
+<span class="w">        </span><span class="n">Metering</span><span class="o">-&gt;&gt;</span><span class="n">Stripe</span><span class="o">:</span><span class="w"> </span><span class="n">Report</span><span class="w"> </span><span class="n">MAU</span><span class="w"> </span><span class="p">(</span><span class="nf">event</span><span class="o">-</span><span class="n">based</span><span class="p">)</span>
+<span class="w">        </span><span class="n">Stripe</span><span class="o">-&gt;&gt;</span><span class="n">Customer</span><span class="o">:</span><span class="w"> </span><span class="n">Invoice</span><span class="w"> </span><span class="p">(</span><span class="n">base</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">overage</span><span class="p">)</span>
+<span class="w">    </span><span class="kd">end</span>
+</code></pre></div>
+
+<h3 id="tabela-de-precos-exemplo-brl">Tabela de Preços (Exemplo BRL)</h3>
+<table>
+<thead>
+<tr>
+<th>Componente</th>
+<th>Starter</th>
+<th>Professional</th>
+<th>Enterprise</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Base/mês</strong></td>
+<td>R$ 299</td>
+<td>R$ 999</td>
+<td>R$ 3.999</td>
+</tr>
+<tr>
+<td><strong>MAU incluídos</strong></td>
+<td>5.000</td>
+<td>25.000</td>
+<td>100.000</td>
+</tr>
+<tr>
+<td><strong>MAU extra</strong></td>
+<td>R$ 0,045/MAU</td>
+<td>R$ 0,035/MAU</td>
+<td>R$ 0,025/MAU</td>
+</tr>
+<tr>
+<td><strong>MFA (TOTP/Push/WebAuthn)</strong></td>
+<td>Incluído</td>
+<td>Incluído</td>
+<td>Incluído</td>
+</tr>
+<tr>
+<td><strong>SCIM Provisioning</strong></td>
+<td>—</td>
+<td>R$ 199/mês</td>
+<td>Incluído</td>
+</tr>
+<tr>
+<td><strong>SIEM Streaming (Splunk/Datadog/S3)</strong></td>
+<td>—</td>
+<td>R$ 299/mês</td>
+<td>Incluído</td>
+</tr>
+<tr>
+<td><strong>Custom Domain + SSL</strong></td>
+<td>R$ 49/mês</td>
+<td>Incluído</td>
+<td>Incluído</td>
+</tr>
+<tr>
+<td><strong>SLA</strong></td>
+<td>99.5%</td>
+<td>99.9%</td>
+<td>99.95%</td>
+</tr>
+<tr>
+<td><strong>Suporte</strong></td>
+<td>Community/Email</td>
+<td>Business (8x5)</td>
+<td>24x7 + Slack</td>
+</tr>
+</tbody>
+</table>
+<h3 id="metricas-de-uso-metering-events">Métricas de Uso (Metering Events)</h3>
+<table>
+<thead>
+<tr>
+<th>Evento</th>
+<th>Propriedades</th>
+<th>Frequência</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>user.login</code></td>
+<td>tenant_id, user_id, method (password/sso/mfa), success</td>
+<td>Por login</td>
+</tr>
+<tr>
+<td><code>token.issued</code></td>
+<td>tenant_id, token_type (access/id/refresh), scopes</td>
+<td>Por emissão</td>
+</tr>
+<tr>
+<td><code>api.call</code></td>
+<td>tenant_id, endpoint, status_code</td>
+<td>Por request</td>
+</tr>
+<tr>
+<td><code>mfa.challenge</code></td>
+<td>tenant_id, user_id, factor (totp/push/webauthn)</td>
+<td>Por desafio</td>
+</tr>
+<tr>
+<td><code>scim.sync</code></td>
+<td>tenant_id, operation (create/update/delete), object_type</td>
+<td>Por mudança</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="5-autenticacao-sso-tokens">5. Autenticação, SSO &amp; Tokens</h2>
+<h3 id="protocolos-suportados">Protocolos Suportados</h3>
+<table>
+<thead>
+<tr>
+<th>Protocolo</th>
+<th>Uso</th>
+<th>Implementação</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>OIDC / OAuth 2.1</strong></td>
+<td>Padrão para SPAs, mobile, APIs</td>
+<td>Keycloak / SuperTokens Core / Ory Hydra</td>
+</tr>
+<tr>
+<td><strong>SAML 2.0</strong></td>
+<td>Enterprise IdP (Azure AD, Okta, Ping)</td>
+<td>Keycloak SAML SP + metadata auto-import</td>
+</tr>
+<tr>
+<td><strong>WS-Federation</strong></td>
+<td>Legado Microsoft</td>
+<td>Keycloak (opcional)</td>
+</tr>
+<tr>
+<td><strong>LDAP / Active Directory</strong></td>
+<td>Sync de usuários/groups</td>
+<td>Keycloak User Federation + periodic sync</td>
+</tr>
+<tr>
+<td><strong>SCIM 2.0</strong></td>
+<td>Provisionamento just-in-time</td>
+<td>Keycloak SCIM endpoint + webhook para billing</td>
+</tr>
+<tr>
+<td><strong>Passkeys / WebAuthn</strong></td>
+<td>Passwordless + MFA forte</td>
+<td>Keycloak 24+ / SuperTokens / Ory Kratos</td>
+</tr>
+</tbody>
+</table>
+<h3 id="fluxo-de-login-authorization-code-flow-pkce">Fluxo de Login (Authorization Code Flow + PKCE)</h3>
+<div class="highlight"><pre><span></span><code><span class="n">sequenceDiagram</span>
+<span class="w">    </span><span class="n">autonumber</span>
+<span class="w">    </span><span class="n">actor</span><span class="w"> </span><span class="n">User</span>
+<span class="w">    </span><span class="n">participant</span><span class="w"> </span><span class="n">App</span><span class="w"> </span><span class="kr">as</span><span class="w"> </span><span class="n">Aplicação</span><span class="w"> </span><span class="n">Cliente</span>
+<span class="w">    </span><span class="n">participant</span><span class="w"> </span><span class="n">Browser</span>
+<span class="w">    </span><span class="n">participant</span><span class="w"> </span><span class="n">DP</span><span class="w"> </span><span class="kr">as</span><span class="w"> </span><span class="kt">Data</span><span class="w"> </span><span class="n">Plane</span><span class="w"> </span><span class="p">(</span><span class="n">Keycloak</span><span class="p">)</span>
+<span class="w">    </span><span class="n">participant</span><span class="w"> </span><span class="n">IdP</span><span class="w"> </span><span class="kr">as</span><span class="w"> </span><span class="n">Enterprise</span><span class="w"> </span><span class="n">IdP</span><span class="w"> </span><span class="p">(</span><span class="n">SAML</span><span class="o">/</span><span class="n">OIDC</span><span class="p">)</span>
+<span class="w">    </span><span class="n">User</span><span class="o">-&gt;&gt;</span><span class="n">Browser</span><span class="o">:</span><span class="w"> </span><span class="n">Acessa</span><span class="w"> </span><span class="n">app</span>
+<span class="w">    </span><span class="n">Browser</span><span class="o">-&gt;&gt;</span><span class="n">App</span><span class="o">:</span><span class="w"> </span><span class="n">GET</span><span class="w"> </span><span class="o">/</span>
+<span class="w">    </span><span class="n">App</span><span class="o">-&gt;&gt;</span><span class="n">Browser</span><span class="o">:</span><span class="w"> </span><span class="n">Redirect</span><span class="w"> </span><span class="err">→</span><span class="w"> </span><span class="o">/</span><span class="n">authorize</span><span class="o">?</span><span class="n">client_id</span><span class="o">&amp;</span><span class="n">redirect_uri</span><span class="o">&amp;</span><span class="n">scope</span><span class="o">&amp;</span><span class="n">code_challenge</span>
+<span class="w">    </span><span class="n">Browser</span><span class="o">-&gt;&gt;</span><span class="n">DP</span><span class="o">:</span><span class="w"> </span><span class="n">GET</span><span class="w"> </span><span class="o">/</span><span class="n">realms</span><span class="o">/</span><span class="p">{</span><span class="n">tenant</span><span class="p">}</span><span class="o">/</span><span class="n">protocol</span><span class="o">/</span><span class="n">openid</span><span class="o">-</span><span class="n">connect</span><span class="o">/</span><span class="n">auth</span>
+<span class="w">    </span><span class="n">alt</span><span class="w"> </span><span class="kr">First</span><span class="w"> </span><span class="n">factor</span>
+<span class="w">        </span><span class="n">DP</span><span class="o">-&gt;&gt;</span><span class="n">Browser</span><span class="o">:</span><span class="w"> </span><span class="n">Login</span><span class="w"> </span><span class="n">page</span><span class="w"> </span><span class="p">(</span><span class="n">branding</span><span class="w"> </span><span class="n">tenant</span><span class="p">)</span>
+<span class="w">        </span><span class="n">User</span><span class="o">-&gt;&gt;</span><span class="n">Browser</span><span class="o">:</span><span class="w"> </span><span class="n">Credenciais</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="n">Social</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="n">Passkey</span>
+<span class="w">    </span><span class="n">else</span><span class="w"> </span><span class="n">Enterprise</span><span class="w"> </span><span class="n">SSO</span>
+<span class="w">        </span><span class="n">DP</span><span class="o">-&gt;&gt;</span><span class="n">IdP</span><span class="o">:</span><span class="w"> </span><span class="n">Redirect</span><span class="w"> </span><span class="n">SAML</span><span class="w"> </span><span class="n">AuthnRequest</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="n">OIDC</span>
+<span class="w">        </span><span class="n">IdP</span><span class="o">-&gt;&gt;</span><span class="n">Browser</span><span class="o">:</span><span class="w"> </span><span class="n">Login</span><span class="w"> </span><span class="n">corporativo</span>
+<span class="w">        </span><span class="n">Browser</span><span class="o">-&gt;&gt;</span><span class="n">DP</span><span class="o">:</span><span class="w"> </span><span class="n">Assertion</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="n">Callback</span>
+<span class="w">    </span><span class="kd">end</span>
+<span class="w">    </span><span class="n">DP</span><span class="o">-&gt;&gt;</span><span class="n">DP</span><span class="o">:</span><span class="w"> </span><span class="n">Valida</span><span class="p">,</span><span class="w"> </span><span class="n">cria</span><span class="w"> </span><span class="n">sessão</span><span class="p">,</span><span class="w"> </span><span class="n">emite</span><span class="w"> </span><span class="n">code</span>
+<span class="w">    </span><span class="n">DP</span><span class="o">-&gt;&gt;</span><span class="n">Browser</span><span class="o">:</span><span class="w"> </span><span class="n">Redirect</span><span class="w"> </span><span class="err">→</span><span class="w"> </span><span class="n">redirect_uri</span><span class="o">?</span><span class="n">code</span><span class="o">=</span><span class="p">...</span>
+<span class="w">    </span><span class="n">Browser</span><span class="o">-&gt;&gt;</span><span class="n">App</span><span class="o">:</span><span class="w"> </span><span class="n">GET</span><span class="w"> </span><span class="o">/</span><span class="n">callback</span><span class="o">?</span><span class="n">code</span><span class="o">=</span><span class="p">...</span>
+<span class="w">    </span><span class="n">App</span><span class="o">-&gt;&gt;</span><span class="n">DP</span><span class="o">:</span><span class="w"> </span><span class="n">POST</span><span class="w"> </span><span class="o">/</span><span class="kt">token</span><span class="w"> </span><span class="p">(</span><span class="n">code</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">code_verifier</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">client_secret</span><span class="p">)</span>
+<span class="w">    </span><span class="n">DP</span><span class="o">-&gt;&gt;</span><span class="n">App</span><span class="o">:</span><span class="w"> </span><span class="p">{</span><span class="n">access_token</span><span class="p">,</span><span class="w"> </span><span class="n">id_token</span><span class="p">,</span><span class="w"> </span><span class="n">refresh_token</span><span class="p">,</span><span class="w"> </span><span class="n">expires_in</span><span class="p">}</span>
+<span class="w">    </span><span class="n">App</span><span class="o">-&gt;&gt;</span><span class="n">Browser</span><span class="o">:</span><span class="w"> </span><span class="nf">Set</span><span class="w"> </span><span class="n">secure</span><span class="w"> </span><span class="n">HttpOnly</span><span class="w"> </span><span class="n">cookies</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="kt">token</span><span class="w"> </span><span class="n">em</span><span class="w"> </span><span class="n">memória</span>
+<span class="w">    </span><span class="n">Browser</span><span class="o">-&gt;&gt;</span><span class="n">App</span><span class="o">:</span><span class="w"> </span><span class="n">Requests</span><span class="w"> </span><span class="n">com</span><span class="w"> </span><span class="n">Authorization</span><span class="o">:</span><span class="w"> </span><span class="n">Bearer</span><span class="w"> </span><span class="o">&lt;</span><span class="n">access_token</span><span class="o">&gt;</span>
+</code></pre></div>
+
+<h3 id="estrutura-de-tokens-jwt">Estrutura de Tokens (JWT)</h3>
+<div class="highlight"><pre><span></span><code><span class="c1">// Access Token (JWT) - Exemplo</span>
+<span class="p">{</span>
+<span class="w">  </span><span class="nt">"header"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">"alg"</span><span class="p">:</span><span class="w"> </span><span class="s2">"RS256"</span><span class="p">,</span><span class="w"> </span><span class="nt">"typ"</span><span class="p">:</span><span class="w"> </span><span class="s2">"JWT"</span><span class="p">,</span><span class="w"> </span><span class="nt">"kid"</span><span class="p">:</span><span class="w"> </span><span class="s2">"k1-2024"</span><span class="w"> </span><span class="p">},</span>
+<span class="w">  </span><span class="nt">"payload"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">"iss"</span><span class="p">:</span><span class="w"> </span><span class="s2">"https://auth.mcp.example/realms/tenant-acme"</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"sub"</span><span class="p">:</span><span class="w"> </span><span class="s2">"u_abc123"</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"aud"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">"api.mcp.example"</span><span class="p">,</span><span class="w"> </span><span class="s2">"client_abc"</span><span class="p">],</span>
+<span class="w">    </span><span class="nt">"azp"</span><span class="p">:</span><span class="w"> </span><span class="s2">"client_abc"</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"sid"</span><span class="p">:</span><span class="w"> </span><span class="s2">"sess_xyz789"</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"tenant_id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"tenant_acme"</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"org_id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"org_001"</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"roles"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">"admin"</span><span class="p">,</span><span class="w"> </span><span class="s2">"billing_manager"</span><span class="p">],</span>
+<span class="w">    </span><span class="nt">"permissions"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">"users:read"</span><span class="p">,</span><span class="w"> </span><span class="s2">"users:write"</span><span class="p">,</span><span class="w"> </span><span class="s2">"audit:read"</span><span class="p">],</span>
+<span class="w">    </span><span class="nt">"scope"</span><span class="p">:</span><span class="w"> </span><span class="s2">"openid profile email roles permissions"</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"auth_time"</span><span class="p">:</span><span class="w"> </span><span class="mi">1729872000</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"acr"</span><span class="p">:</span><span class="w"> </span><span class="s2">"mfa"</span><span class="p">,</span><span class="w">           </span><span class="c1">// nível de garantia</span>
+<span class="w">    </span><span class="nt">"amr"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">"pwd"</span><span class="p">,</span><span class="w"> </span><span class="s2">"totp"</span><span class="p">],</span><span class="w"> </span><span class="c1">// métodos de autenticação</span>
+<span class="w">    </span><span class="nt">"exp"</span><span class="p">:</span><span class="w"> </span><span class="mi">1729875600</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"iat"</span><span class="p">:</span><span class="w"> </span><span class="mi">1729872000</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"jti"</span><span class="p">:</span><span class="w"> </span><span class="s2">"tok_abcdef123456"</span>
+<span class="w">  </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<h4 id="claims-personalizaveis-por-tenant-via-admin-console">Claims Personalizáveis por Tenant (via Admin Console)</h4>
+<table>
+<thead>
+<tr>
+<th>Claim</th>
+<th>Fonte</th>
+<th>Exemplo</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>tenant_id</code></td>
+<td>Fixo no realm</td>
+<td><code>tenant_acme</code></td>
+</tr>
+<tr>
+<td><code>org_id</code></td>
+<td>Atributo do usuário / group membership</td>
+<td><code>org_001</code></td>
+</tr>
+<tr>
+<td><code>cost_center</code></td>
+<td>LDAP / SCIM / custom attribute</td>
+<td><code>CC-1234</code></td>
+</tr>
+<tr>
+<td><code>data_region</code></td>
+<td>Configuração do tenant</td>
+<td><code>sa-east-1</code></td>
+</tr>
+<tr>
+<td><code>feature_flags</code></td>
+<td>JSON em user attribute</td>
+<td><code>{"beta_ui": true}</code></td>
+</tr>
+</tbody>
+</table>
+<h3 id="rotacao-revogacao">Rotação &amp; Revogação</h3>
+<table>
+<thead>
+<tr>
+<th>Token</th>
+<th>TTL Padrão</th>
+<th>Renovação</th>
+<th>Revogação</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Access Token</strong></td>
+<td>15 min</td>
+<td>Refresh token</td>
+<td>Token introspection / JWKS cache (5 min)</td>
+</tr>
+<tr>
+<td><strong>Refresh Token</strong></td>
+<td>30 dias (rotativo)</td>
+<td>Rotation a cada uso + reuse detection</td>
+<td>Revogação imediata (logout global, admin, segurança)</td>
+</tr>
+<tr>
+<td><strong>ID Token</strong></td>
+<td>1 h</td>
+<td>Re-autenticação</td>
+<td>Não revogável (stateless) — curto TTL</td>
+</tr>
+<tr>
+<td><strong>Session (server-side)</strong></td>
+<td>30 dias idle</td>
+<td>Sliding window</td>
+<td><code>POST /admin/realms/{tenant}/logout-all</code></td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="6-isolamento-de-dados-seguranca">6. Isolamento de Dados &amp; Segurança</h2>
+<h3 id="camadas-de-isolamento">Camadas de Isolamento</h3>
+<div class="highlight"><pre><span></span><code><span class="n">graph</span><span class="w"> </span><span class="n">TB</span>
+<span class="w">    </span><span class="n">subgraph</span><span class="w"> </span><span class="n">Network</span>
+<span class="w">        </span><span class="n">FW</span><span class="p">[</span><span class="n">WAF</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="n">Cloudflare</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="n">AWS</span><span class="w"> </span><span class="n">Shield</span><span class="p">]</span>
+<span class="w">        </span><span class="n">VPC</span><span class="p">[</span><span class="n">VPC</span><span class="w"> </span><span class="n">Dedicado</span><span class="w"> </span><span class="n">por</span><span class="w"> </span><span class="n">Tier</span>\<span class="n">nEnterprise</span><span class="o">+</span><span class="p">]</span>
+<span class="w">        </span><span class="n">SG</span><span class="p">[</span><span class="n">Security</span><span class="w"> </span><span class="n">Groups</span>\<span class="n">nDeny</span><span class="o">-</span><span class="n">by</span><span class="o">-</span><span class="n">default</span><span class="p">]</span>
+<span class="w">    </span><span class="n">end</span>
+
+<span class="w">    </span><span class="n">subgraph</span><span class="w"> </span><span class="n">Data</span>
+<span class="w">        </span><span class="n">RLS</span><span class="p">[</span><span class="n">Row</span><span class="w"> </span><span class="n">Level</span><span class="w"> </span><span class="n">Security</span>\<span class="n">nPostgreSQL</span><span class="w"> </span><span class="n">policies</span><span class="p">]</span>
+<span class="w">        </span><span class="n">ENC</span><span class="p">[</span><span class="n">Encryption</span><span class="w"> </span><span class="n">at</span><span class="w"> </span><span class="n">Rest</span>\<span class="n">nAES</span><span class="o">-</span><span class="mi">256</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">KMS</span><span class="w"> </span><span class="p">(</span><span class="n">BYOK</span><span class="w"> </span><span class="n">opcional</span><span class="p">)]</span>
+<span class="w">        </span><span class="n">TLS</span><span class="p">[</span><span class="n">TLS</span><span class="w"> </span><span class="mf">1.3</span><span class="w"> </span><span class="n">everywhere</span>\<span class="n">nmTLS</span><span class="w"> </span><span class="n">entre</span><span class="w"> </span><span class="n">CP</span><span class="w"> </span><span class="err">↔</span><span class="w"> </span><span class="n">DP</span><span class="p">]</span>
+<span class="w">        </span><span class="n">BKP</span><span class="p">[</span><span class="n">Backups</span><span class="w"> </span><span class="n">criptografados</span>\<span class="n">nRPO</span><span class="w"> </span><span class="mi">1</span><span class="n">h</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="n">RTO</span><span class="w"> </span><span class="mi">4</span><span class="n">h</span><span class="p">]</span>
+<span class="w">    </span><span class="n">end</span>
+
+<span class="w">    </span><span class="n">subgraph</span><span class="w"> </span><span class="n">Runtime</span>
+<span class="w">        </span><span class="n">NS</span><span class="p">[</span><span class="n">Namespace</span><span class="w"> </span><span class="n">K8s</span><span class="w"> </span><span class="n">por</span><span class="w"> </span><span class="n">tenant</span>\<span class="n">nResource</span><span class="w"> </span><span class="n">quotas</span><span class="p">]</span>
+<span class="w">        </span><span class="n">PSP</span><span class="p">[</span><span class="n">Pod</span><span class="w"> </span><span class="n">Security</span><span class="w"> </span><span class="n">Standards</span>\<span class="n">nRestricted</span><span class="p">]</span>
+<span class="w">        </span><span class="n">SA</span><span class="p">[</span><span class="n">Service</span><span class="w"> </span><span class="n">Accounts</span>\<span class="n">neIRSA</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="n">Workload</span><span class="w"> </span><span class="n">Identity</span><span class="p">]</span>
+<span class="w">    </span><span class="n">end</span>
+
+<span class="w">    </span><span class="n">subgraph</span><span class="w"> </span><span class="n">Operational</span>
+<span class="w">        </span><span class="n">AUD</span><span class="p">[</span><span class="n">Audit</span><span class="w"> </span><span class="n">Logs</span><span class="w"> </span><span class="n">imutáveis</span>\<span class="n">nCloudTrail</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="n">Loki</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">S3</span><span class="w"> </span><span class="n">WORM</span><span class="p">]</span>
+<span class="w">        </span><span class="n">SIEM</span><span class="p">[</span><span class="n">Streaming</span><span class="w"> </span><span class="n">para</span><span class="w"> </span><span class="n">SIEM</span><span class="w"> </span><span class="n">cliente</span>\<span class="n">n</span><span class="p">(</span><span class="n">Splunk</span><span class="p">,</span><span class="w"> </span><span class="n">Datadog</span><span class="p">,</span><span class="w"> </span><span class="n">S3</span><span class="p">)]</span>
+<span class="w">        </span><span class="n">INC</span><span class="p">[</span><span class="n">Incident</span><span class="w"> </span><span class="n">Response</span>\<span class="n">nRunbooks</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">On</span><span class="o">-</span><span class="n">call</span><span class="p">]</span>
+<span class="w">    </span><span class="n">end</span>
+
+<span class="w">    </span><span class="n">FW</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">VPC</span>
+<span class="w">    </span><span class="n">VPC</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">SG</span>
+<span class="w">    </span><span class="n">SG</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">RLS</span>
+<span class="w">    </span><span class="n">RLS</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">ENC</span>
+<span class="w">    </span><span class="n">ENC</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">TLS</span>
+<span class="w">    </span><span class="n">TLS</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">BKP</span>
+<span class="w">    </span><span class="n">NS</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">PSP</span>
+<span class="w">    </span><span class="n">PSP</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">SA</span>
+<span class="w">    </span><span class="n">AUD</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">SIEM</span>
+<span class="w">    </span><span class="n">SIEM</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">INC</span>
+</code></pre></div>
+
+<h3 id="checklist-de-conformidade-lgpd-soc-2-type-ii">Checklist de Conformidade (LGPD / SOC 2 Type II)</h3>
+<ul>
+<li>[ ] <strong>Data Processing Addendum (DPA)</strong> padrão + sub-processadores listados</li>
+<li>[ ] <strong>Right to be forgotten</strong> → API <code>DELETE /tenants/{id}/users/{userId}</code> + purge job 30d</li>
+<li>[ ] <strong>Data Portability</strong> → Export JSON/CSV completo via Admin Console ou API</li>
+<li>[ ] <strong>Breach Notification</strong> &lt; 72h (processo documentado + templates)</li>
+<li>[ ] <strong>Encryption Keys</strong> → AWS KMS / GCP KMS / HashiCorp Vault; rotação 90d</li>
+<li>[ ] <strong>Pen Test</strong> anual + bug bounty (HackerOne/Intigriti)</li>
+<li>[ ] <strong>SOC 2 Type II</strong> → Auditoria anual (Vanta/Drata para automação)</li>
+</ul>
+<hr />
+<h2 id="7-bases-tecnicas-recomendadas-escolha-do-data-plane">7. Bases Técnicas Recomendadas (Escolha do Data Plane)</h2>
+<table>
+<thead>
+<tr>
+<th>Critério</th>
+<th><strong>Keycloak (Quarkus)</strong></th>
+<th><strong>SuperTokens Core</strong></th>
+<th><strong>Ory Stack (Kratos+Hydra+Keto)</strong></th>
+<th><strong>FusionAuth Community</strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Licença</strong></td>
+<td>Apache 2.0</td>
+<td>Apache 2.0</td>
+<td>Apache 2.0</td>
+<td>Apache 2.0 (core)</td>
+</tr>
+<tr>
+<td><strong>Arquitetura</strong></td>
+<td>Servidor standalone (Java)</td>
+<td>Biblioteca embarcada + Core (Java)</td>
+<td>Microserviços Go (Kratos, Hydra, Keto)</td>
+<td>Servidor standalone (Java)</td>
+</tr>
+<tr>
+<td><strong>Multi-tenancy</strong></td>
+<td>Realms (nativos)</td>
+<td>Tenants (nativos)</td>
+<td>Projects (Kratos) + Namespaces</td>
+<td>Tenants (nativos)</td>
+</tr>
+<tr>
+<td><strong>Protocols</strong></td>
+<td>OIDC, SAML, WS-Fed, LDAP, Kerberos</td>
+<td>OIDC, SAML (beta), proprietário</td>
+<td>OIDC, OAuth2, SAML (Hydra)</td>
+<td>OIDC, SAML, WS-Fed, LDAP</td>
+</tr>
+<tr>
+<td><strong>Admin UI</strong></td>
+<td>Completa (React)</td>
+<td>Básica (Dashboard pago)</td>
+<td>Ory Console (SaaS) ou self-host</td>
+<td>Completa (React)</td>
+</tr>
+<tr>
+<td><strong>Performance</strong></td>
+<td>~5k req/s / node (JIT warm)</td>
+<td>~10k req/s / core (stateless)</td>
+<td>~20k req/s (Go, horizontal)</td>
+<td>~8k req/s / node</td>
+</tr>
+<tr>
+<td><strong>Ecossistema</strong></td>
+<td>Maduro, muitos SPIs</td>
+<td>SDKs Node/Python/Go</td>
+<td>SDKs múltiplos, CNCF</td>
+<td>Plugins, lambda functions</td>
+</tr>
+<tr>
+<td><strong>Operação</strong></td>
+<td>Java tuning, GC, heap</td>
+<td>Core stateless + DB</td>
+<td>3 serviços + DBs (Postgres, Redis)</td>
+<td>Similar Keycloak</td>
+</tr>
+<tr>
+<td><strong>Custo Infra</strong></td>
+<td>Médio (JVM)</td>
+<td>Baixo (Core leve)</td>
+<td>Médio (3 containers)</td>
+<td>Médio</td>
+</tr>
+<tr>
+<td><strong>Ideal para</strong></td>
+<td>Enterprise SSO completo, SAML heavy</td>
+<td>Embedded auth, controle total no app</td>
+<td>Cloud-native, microserviços, policy-as-code</td>
+<td>Migração rápida de Auth0, UI rica</td>
+</tr>
+</tbody>
+</table>
+<h3 id="minha-recomendacao-inicial">Minha Recomendação Inicial</h3>
+<blockquote>
+<p><strong>Keycloak (Quarkus) + Control Plane próprio em Go/TypeScript</strong>
+- Realms = isolamento nativo testado em produção massiva
+- SPIs para customização (custom authenticators, event listeners, user storage)
+- Admin API completa para provisionamento automatizado
+- Comunidade grande, suporte comercial (Red Hat, Skycloak, Inteca)
+- Roadmap: migrar data planes para <strong>SuperTokens Core</strong> no tier Starter (menor footprint) mantendo Keycloak no Enterprise/BYOC</p>
+</blockquote>
+<hr />
+<h2 id="8-roadmap-de-implementacao-12-semanas">8. Roadmap de Implementação (12 Semanas)</h2>
+<div class="highlight"><pre><span></span><code><span class="n">gantt</span>
+<span class="w">    </span><span class="n">title</span><span class="w"> </span><span class="n">Roadmap</span><span class="w"> </span><span class="n">MCP</span><span class="w"> </span><span class="n">Platform</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="mi">12</span><span class="w"> </span><span class="n">Semanas</span>
+<span class="w">    </span><span class="n">dateFormat</span><span class="w">  </span><span class="n">YYYY</span><span class="o">-</span><span class="n">MM</span><span class="o">-</span><span class="n">DD</span>
+<span class="w">    </span><span class="n">axisFormat</span><span class="w">  </span><span class="o">%</span><span class="n">d</span><span class="o">/%</span><span class="n">m</span>
+<span class="w">    </span><span class="n">todayMarker</span><span class="w"> </span><span class="n">stroke</span><span class="o">-</span><span class="nl">width</span><span class="p">:</span><span class="mi">2</span><span class="p">,</span><span class="nl">stroke</span><span class="p">:</span><span class="n">red</span>
+
+<span class="w">    </span><span class="k">section</span><span class="w"> </span><span class="n">Fundação</span>
+<span class="w">    </span><span class="n">Infra</span><span class="w"> </span><span class="n">Base</span><span class="w"> </span><span class="p">(</span><span class="n">K8s</span><span class="p">,</span><span class="w"> </span><span class="n">PG</span><span class="p">,</span><span class="w"> </span><span class="n">Redis</span><span class="p">,</span><span class="w"> </span><span class="n">Kafka</span><span class="p">,</span><span class="w"> </span><span class="n">Vault</span><span class="p">)</span><span class="w">     </span><span class="err">:</span><span class="n">a1</span><span class="p">,</span><span class="w"> </span><span class="mi">2025</span><span class="o">-</span><span class="mi">01</span><span class="o">-</span><span class="mi">06</span><span class="p">,</span><span class="w"> </span><span class="mi">14</span><span class="n">d</span>
+<span class="w">    </span><span class="n">Control</span><span class="w"> </span><span class="n">Plane</span><span class="w"> </span><span class="n">API</span><span class="w"> </span><span class="p">(</span><span class="n">CRUD</span><span class="w"> </span><span class="n">Tenants</span><span class="p">,</span><span class="w"> </span><span class="n">Plans</span><span class="p">)</span><span class="w">       </span><span class="err">:</span><span class="n">a2</span><span class="p">,</span><span class="w"> </span><span class="k">after</span><span class="w"> </span><span class="n">a1</span><span class="p">,</span><span class="w"> </span><span class="mi">10</span><span class="n">d</span>
+<span class="w">    </span><span class="n">Provisioning</span><span class="w"> </span><span class="n">Engine</span><span class="w"> </span><span class="p">(</span><span class="n">Keycloak</span><span class="w"> </span><span class="n">Realm</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">DB</span><span class="p">)</span><span class="w">     </span><span class="err">:</span><span class="n">a3</span><span class="p">,</span><span class="w"> </span><span class="k">after</span><span class="w"> </span><span class="n">a2</span><span class="p">,</span><span class="w"> </span><span class="mi">14</span><span class="n">d</span>
+
+<span class="w">    </span><span class="k">section</span><span class="w"> </span><span class="n">Auth</span><span class="w"> </span><span class="n">Core</span>
+<span class="w">    </span><span class="n">Keycloak</span><span class="w"> </span><span class="n">Cluster</span><span class="w"> </span><span class="p">(</span><span class="n">HA</span><span class="p">,</span><span class="w"> </span><span class="n">Quarkus</span><span class="p">,</span><span class="w"> </span><span class="n">Operator</span><span class="p">)</span><span class="w">      </span><span class="err">:</span><span class="n">b1</span><span class="p">,</span><span class="w"> </span><span class="mi">2025</span><span class="o">-</span><span class="mi">01</span><span class="o">-</span><span class="mi">06</span><span class="p">,</span><span class="w"> </span><span class="mi">21</span><span class="n">d</span>
+<span class="w">    </span><span class="n">Realm</span><span class="w"> </span><span class="n">Template</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">Branding</span><span class="w"> </span><span class="n">Engine</span><span class="w">              </span><span class="err">:</span><span class="n">b2</span><span class="p">,</span><span class="w"> </span><span class="k">after</span><span class="w"> </span><span class="n">b1</span><span class="p">,</span><span class="w"> </span><span class="mi">7</span><span class="n">d</span>
+<span class="w">    </span><span class="n">SSO</span><span class="w"> </span><span class="n">Federation</span><span class="w"> </span><span class="p">(</span><span class="n">SAML</span><span class="o">/</span><span class="n">OIDC</span><span class="p">)</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">SCIM</span><span class="w">             </span><span class="err">:</span><span class="n">b3</span><span class="p">,</span><span class="w"> </span><span class="k">after</span><span class="w"> </span><span class="n">b2</span><span class="p">,</span><span class="w"> </span><span class="mi">10</span><span class="n">d</span>
+
+<span class="w">    </span><span class="k">section</span><span class="w"> </span><span class="n">Billing</span><span class="w"> </span><span class="o">&amp;</span><span class="w"> </span><span class="n">Ops</span>
+<span class="w">    </span><span class="n">Stripe</span><span class="w"> </span><span class="n">Integration</span><span class="w"> </span><span class="p">(</span><span class="n">Subs</span><span class="p">,</span><span class="w"> </span><span class="n">Metering</span><span class="p">,</span><span class="w"> </span><span class="n">Portal</span><span class="p">)</span><span class="w">   </span><span class="err">:</span><span class="n">c1</span><span class="p">,</span><span class="w"> </span><span class="k">after</span><span class="w"> </span><span class="n">a3</span><span class="p">,</span><span class="w"> </span><span class="mi">10</span><span class="n">d</span>
+<span class="w">    </span><span class="k">Usage</span><span class="w"> </span><span class="n">Pipeline</span><span class="w"> </span><span class="p">(</span><span class="n">Kafka</span><span class="w"> </span><span class="err">→</span><span class="w"> </span><span class="n">ClickHouse</span><span class="w"> </span><span class="err">→</span><span class="w"> </span><span class="n">Stripe</span><span class="p">)</span><span class="w">  </span><span class="err">:</span><span class="n">c2</span><span class="p">,</span><span class="w"> </span><span class="k">after</span><span class="w"> </span><span class="n">c1</span><span class="p">,</span><span class="w"> </span><span class="mi">7</span><span class="n">d</span>
+<span class="w">    </span><span class="k">Admin</span><span class="w"> </span><span class="n">Console</span><span class="w"> </span><span class="p">(</span><span class="n">React</span><span class="p">,</span><span class="w"> </span><span class="n">RBAC</span><span class="p">,</span><span class="w"> </span><span class="n">Audit</span><span class="w"> </span><span class="n">Logs</span><span class="p">)</span><span class="w">       </span><span class="err">:</span><span class="n">c3</span><span class="p">,</span><span class="w"> </span><span class="k">after</span><span class="w"> </span><span class="n">c1</span><span class="p">,</span><span class="w"> </span><span class="mi">14</span><span class="n">d</span>
+
+<span class="w">    </span><span class="k">section</span><span class="w"> </span><span class="n">Hardening</span>
+<span class="w">    </span><span class="n">mTLS</span><span class="p">,</span><span class="w"> </span><span class="n">Network</span><span class="w"> </span><span class="n">Policies</span><span class="p">,</span><span class="w"> </span><span class="n">WAF</span><span class="p">,</span><span class="w"> </span><span class="n">Pen</span><span class="w"> </span><span class="n">Test</span><span class="w">         </span><span class="err">:</span><span class="n">d1</span><span class="p">,</span><span class="w"> </span><span class="k">after</span><span class="w"> </span><span class="n">b3</span><span class="p">,</span><span class="w"> </span><span class="mi">10</span><span class="n">d</span>
+<span class="w">    </span><span class="n">Disaster</span><span class="w"> </span><span class="n">Recovery</span><span class="w"> </span><span class="n">Drill</span><span class="w"> </span><span class="p">(</span><span class="n">RPO</span><span class="o">/</span><span class="n">RTO</span><span class="p">)</span><span class="w">             </span><span class="err">:</span><span class="n">d2</span><span class="p">,</span><span class="w"> </span><span class="k">after</span><span class="w"> </span><span class="n">d1</span><span class="p">,</span><span class="w"> </span><span class="mi">7</span><span class="n">d</span>
+<span class="w">    </span><span class="n">Docs</span><span class="w"> </span><span class="n">SDKs</span><span class="w"> </span><span class="p">(</span><span class="n">TS</span><span class="p">,</span><span class="w"> </span><span class="n">Python</span><span class="p">,</span><span class="w"> </span><span class="k">Go</span><span class="p">)</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">Onboarding</span><span class="w"> </span><span class="n">Flow</span><span class="w">  </span><span class="err">:</span><span class="n">d3</span><span class="p">,</span><span class="w"> </span><span class="k">after</span><span class="w"> </span><span class="n">c3</span><span class="p">,</span><span class="w"> </span><span class="mi">7</span><span class="n">d</span>
+
+<span class="w">    </span><span class="k">section</span><span class="w"> </span><span class="n">Launch</span>
+<span class="w">    </span><span class="n">Beta</span><span class="w"> </span><span class="n">Privado</span><span class="w"> </span><span class="p">(</span><span class="mi">3</span><span class="o">-</span><span class="mi">5</span><span class="w"> </span><span class="n">design</span><span class="w"> </span><span class="n">partners</span><span class="p">)</span><span class="w">            </span><span class="err">:</span><span class="n">e1</span><span class="p">,</span><span class="w"> </span><span class="k">after</span><span class="w"> </span><span class="n">d2</span><span class="p">,</span><span class="w"> </span><span class="mi">14</span><span class="n">d</span>
+<span class="w">    </span><span class="n">GA</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="k">Public</span><span class="w"> </span><span class="n">Pricing</span><span class="w"> </span><span class="n">Page</span><span class="w">                      </span><span class="err">:</span><span class="n">e2</span><span class="p">,</span><span class="w"> </span><span class="k">after</span><span class="w"> </span><span class="n">e1</span><span class="p">,</span><span class="w"> </span><span class="mi">7</span><span class="n">d</span>
+</code></pre></div>
+
+<h3 id="marcos-entregaveis">Marcos &amp; Entregáveis</h3>
+<table>
+<thead>
+<tr>
+<th>Semana</th>
+<th>Marco</th>
+<th>Entregável</th>
+<th>Critério de Sucesso</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>2</td>
+<td><strong>Infra Pronta</strong></td>
+<td>K8s + PG + Redis + Kafka + Vault + Observabilidade (Grafana/Loki/Tempo)</td>
+<td><code>kubectl get nodes</code> healthy, backups testados</td>
+</tr>
+<tr>
+<td>4</td>
+<td><strong>Provisioning E2E</strong></td>
+<td>API cria tenant → realm Keycloak + DB schema + client_secret em &lt; 30s</td>
+<td>100 tenants de teste provisionados sem erro</td>
+</tr>
+<tr>
+<td>6</td>
+<td><strong>Auth Funcional</strong></td>
+<td>Login OIDC + SAML + MFA (TOTP/WebAuthn) + Refresh rotation</td>
+<td>Cypress suite &gt; 90% pass, latência p95 &lt; 200ms</td>
+</tr>
+<tr>
+<td>8</td>
+<td><strong>Billing Live</strong></td>
+<td>Stripe cobra base + overage MAU + portal self-service</td>
+<td>Fatura correta para 5 tenants simulados 30 dias</td>
+</tr>
+<tr>
+<td>10</td>
+<td><strong>Hardened</strong></td>
+<td>mTLS CP↔DP, WAF, Pen Test limpo, DR validado</td>
+<td>Relatório pen test sem críticos, RTO &lt; 4h</td>
+</tr>
+<tr>
+<td>12</td>
+<td><strong>Beta → GA</strong></td>
+<td>3 design partners em produção, docs SDKs, pricing público</td>
+<td>NPS &gt; 40, churn 0, MRR target atingido</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="9-referencias-fontes">9. Referências &amp; Fontes</h2>
+<h3 id="documentacao-oficial">Documentação Oficial</h3>
+<ul>
+<li><a href="https://www.keycloak.org/architecture">Keycloak Architecture</a> — realms, clients, flows, SPIs</li>
+<li><a href="https://www.keycloak.org/docs/latest/server_admin/#_master-realm">Keycloak Multi-tenancy Patterns</a></li>
+<li><a href="https://supertokens.com/docs/authentication/enterprise/multi-tenancy">SuperTokens Multi-tenancy</a></li>
+<li><a href="https://www.ory.sh/kratos/docs/concepts/architecture">Ory Kratos Architecture</a></li>
+<li><a href="https://www.ory.sh/hydra/docs">Ory Hydra (OAuth2 Server)</a></li>
+<li><a href="https://aws.amazon.com/cognito/pricing/">AWS Cognito Pricing</a></li>
+<li><a href="https://auth0.com/pricing">Auth0 Pricing &amp; Organizations</a></li>
+<li><a href="https://www.okta.com/pricing/">Okta Pricing</a></li>
+<li><a href="https://learn.microsoft.com/en-us/azure/active-directory-b2c/billing">Azure AD B2C Billing</a></li>
+<li><a href="https://stripe.com/docs/billing/subscriptions/usage-based">Stripe Metered Billing</a></li>
+<li><a href="https://www.getlago.com/">Lago (Open-source Billing)</a></li>
+<li><a href="https://openmeter.io/">OpenMeter</a></li>
+</ul>
+<h3 id="artigos-benchmarks">Artigos &amp; Benchmarks</h3>
+<ul>
+<li><a href="https://skycloak.io/blog/keycloak-vs-supertokens-comparison">Auth0 vs Keycloak vs SuperTokens — 2024 Comparison</a></li>
+<li><a href="https://www.infoq.com/articles/multi-tenant-identity-platform/">Building a Multi-tenant Identity Platform</a></li>
+<li><a href="https://www.cybertec-postgresql.com/en/row-level-security-postgresql-multi-tenancy/">Row Level Security in PostgreSQL for Multi-tenancy</a></li>
+<li><a href="https://datatracker.ietf.org/doc/html/draft-ietf-oauth-v2-1-12">OAuth 2.1 / OIDC Best Practices (IETF)</a></li>
+<li><a href="https://www.keycloak.org/2024/03/passkeys-support">Passkeys / WebAuthn in Keycloak 24+</a></li>
+</ul>
+<h3 id="compliance-security">Compliance &amp; Security</h3>
+<ul>
+<li><a href="https://www.gov.br/anpd/pt-br/assuntos/guias-e-cartilhas">LGPD Guia Prático (ANPD)</a></li>
+<li><a href="https://www.vanta.com/soc-2-checklist">SOC 2 Type II Checklist</a></li>
+<li><a href="https://cheatsheetseries.owasp.org/cheatsheets/Authentication_Cheat_Sheet.html">OWASP Authentication Cheat Sheet</a></li>
+<li><a href="https://pages.nist.gov/800-63-3/sp800-63b.html">NIST 800-63B Digital Identity Guidelines</a></li>
+</ul>
+<h3 id="ferramentas-de-apoio">Ferramentas de Apoio</h3>
+<ul>
+<li><a href="https://github.com/keycloak/keycloak-operator">Keycloak Operator (K8s)</a></li>
+<li><a href="https://hub.docker.com/r/supertokens/supertokens-core">SuperTokens Core Docker</a></li>
+<li><a href="https://github.com/ory/k8s">Ory K8s Helm Charts</a></li>
+<li><a href="https://temporal.io/">Temporal (Provisioning Workflows)</a></li>
+<li><a href="https://www.openpolicyagent.org/">OpenPolicyAgent (AuthZ)</a></li>
+</ul>
+<hr />
+<h2 id="10-proximos-passos-imediatos-esta-semana">10. Próximos Passos Imediatos (Esta Semana)</h2>
+<ol>
+<li><strong>Provisionar cluster K8s dev</strong> (kind / k3d / EKS dev) + PostgreSQL + Redis + Kafka (Strimzi).</li>
+<li><strong>Subir Keycloak Quarkus</strong> via Operator + realm <code>master</code> + realm template <code>tenant-template</code>.</li>
+<li><strong>Escrever script de provisioning</strong> (Go/TS) que: cria realm, configura client <code>mcp-api</code>, habilita SAML/OIDC, aplica tema, gera <code>client_secret</code>, registra webhook <code>tenant.ready</code>.</li>
+<li><strong>Definir schema de billing</strong> no Stripe (products, prices, meters) + webhook <code>invoice.payment_succeeded</code> → libera features.</li>
+<li><strong>Montar repo <code>mcp-control-plane</code></strong> (monorepo: <code>api</code>, <code>provisioner</code>, <code>console</code>, <code>docs</code>) com CI/CD (GitHub Actions + ArgoCD).</li>
+<li><strong>Agendar 2h com 3 design partners</strong> (SaaS B2B conhecidos) para validar pricing, SSO requirements, data residency.</li>
+</ol>
+<hr />
+<p><em>Documento gerado em 2025-01-25 — Versão 1.0</em><br />
+<em>Próxima revisão: após validação com design partners (Semana 4)</em></p>

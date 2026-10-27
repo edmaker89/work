@@ -1,0 +1,1462 @@
+<h1 id="plataforma-mcp-model-context-protocol-pesquisa-servico-baseado-em-freshservice"><a class="toclink" href="#plataforma-mcp-model-context-protocol-pesquisa-servico-baseado-em-freshservice">Plataforma MCP (Model Context Protocol) — Pesquisa: Serviço Baseado em Freshservice</a><a class="headerlink" href="#plataforma-mcp-model-context-protocol-pesquisa-servico-baseado-em-freshservice" title="Permanent link">&para;</a></h1>
+<blockquote>
+<p><strong>Objetivo</strong>: Estruturar uma plataforma MCP multi-tenant para oferecer <strong>MCP servers como serviço (B2B)</strong> baseados no <strong>Freshservice (ITSM)</strong>, com billing, autenticação/SSO (OAuth 2.1 + PKCE), tokens, isolamento de dados, registry/catalog e provisionamento self-service. A plataforma <strong>gerencia</strong> o ciclo de vida completo: provisiona, autentica, monitora, cobra e governa os MCP servers Freshservice por tenant/ambiente.</p>
+</blockquote>
+<hr />
+<h2 id="1-visao-geral-oportunidade-freshservice-focused"><a class="toclink" href="#1-visao-geral-oportunidade-freshservice-focused">1. Visão Geral &amp; Oportunidade (Freshservice-Focused)</a><a class="headerlink" href="#1-visao-geral-oportunidade-freshservice-focused" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Aspecto</th>
+<th>Detalhamento</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Produto Core</strong></td>
+<td><strong>Freshservice MCP Server</strong> — expõe tickets, assets, catálogo de serviços, change management, knowledge base, CMDB, workflows do Freshservice como <em>tools</em> MCP padronizadas.</td>
+</tr>
+<tr>
+<td><strong>Arquitetura Core</strong></td>
+<td><strong>MCP Host</strong> (Claude Desktop, Cursor, agents custom) → <strong>MCP Client</strong> ↔ <strong>Freshservice MCP Server</strong> (nosso código, roda no nosso Data Plane). Transporte: <strong>Streamable HTTP</strong> (remoto, multi-tenant) + <strong>STDIO</strong> (dev local).</td>
+</tr>
+<tr>
+<td><strong>Papéis da Nossa Plataforma</strong></td>
+<td>1. <strong>Control Plane</strong> (API, Provisioning, Billing, Registry, AuthZ, Admin Console) 2. <strong>Data Plane</strong> (MCP Gateway + Freshservice MCP Server containers por tenant/ambiente) 3. <strong>Registry Privado</strong> (versões, signing, security scan, tenant allowlist).</td>
+</tr>
+<tr>
+<td><strong>Público-Alvo</strong></td>
+<td>MSPs, consultorias ITSM, departamentos de TI enterprise, SaaS que querem expor Freshservice para agentes IA sem construir infra.</td>
+</tr>
+<tr>
+<td><strong>Diferencial vs. Gateways Genéricos</strong></td>
+<td><strong>Domain-specific</strong>: tools nativas Freshservice (não wrappers genéricos), OAuth Freshservice nativo, rate limits alinhados à API Freshservice, schema de tools otimizado para ITSM, compliance LGPD/SOC2 herdado.</td>
+</tr>
+<tr>
+<td><strong>Modelo de Negócio</strong></td>
+<td><strong>Plataforma (Control Plane)</strong> + <strong>Freshservice MCP Servers gerenciados</strong> por tenant/ambiente. Receita: subscription base + overage tool-calls + add-ons (connectors premium: Jira, Azure DevOps, Slack; SIEM streaming; custom domains; SLA enterprise; white-label).</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="2-arquitetura-de-referencia-freshservice-mcp-platform"><a class="toclink" href="#2-arquitetura-de-referencia-freshservice-mcp-platform">2. Arquitetura de Referência (Freshservice MCP Platform)</a><a class="headerlink" href="#2-arquitetura-de-referencia-freshservice-mcp-platform" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><span class="n">flowchart</span><span class="w"> </span><span class="n">TB</span>
+<span class="w">    </span><span class="n">subgraph</span><span class="w"> </span><span class="n">CP</span><span class="p">[</span><span class="n">Control</span><span class="w"> </span><span class="n">Plane</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="n">SaaS</span><span class="w"> </span><span class="n">Operator</span><span class="p">]</span>
+<span class="w">        </span><span class="n">API</span><span class="p">[</span><span class="n">API</span><span class="w"> </span><span class="n">Gateway</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="n">Control</span><span class="w"> </span><span class="n">API</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="p">(</span><span class="n">REST</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">GraphQL</span><span class="p">)]</span>
+<span class="w">        </span><span class="n">PM</span><span class="p">[</span><span class="n">Provisioning</span><span class="w"> </span><span class="n">Manager</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="p">(</span><span class="n">Tenant</span><span class="w"> </span><span class="n">lifecycle</span><span class="p">,</span><span class="w"> </span><span class="n">FS</span><span class="w"> </span><span class="n">MCP</span><span class="w"> </span><span class="n">Server</span><span class="w"> </span><span class="n">templates</span><span class="p">)]</span>
+<span class="w">        </span><span class="n">BM</span><span class="p">[</span><span class="n">Billing</span><span class="w"> </span><span class="o">&amp;</span><span class="w"> </span><span class="n">Metering</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="p">(</span><span class="n">Tool</span><span class="w"> </span><span class="n">calls</span><span class="p">,</span><span class="w"> </span><span class="n">MAU</span><span class="p">,</span><span class="w"> </span><span class="n">add</span><span class="o">-</span><span class="n">ons</span><span class="p">)]</span>
+<span class="w">        </span><span class="n">RG</span><span class="p">[</span><span class="n">Registry</span><span class="w"> </span><span class="o">&amp;</span><span class="w"> </span><span class="n">Catalog</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="p">(</span><span class="n">Freshservice</span><span class="w"> </span><span class="n">MCP</span><span class="w"> </span><span class="n">Server</span><span class="w"> </span><span class="n">versions</span><span class="p">)]</span>
+<span class="w">        </span><span class="n">AM</span><span class="p">[</span><span class="n">AuthZ</span><span class="w"> </span><span class="n">Policy</span><span class="w"> </span><span class="n">Engine</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="p">(</span><span class="n">OPA</span><span class="o">/</span><span class="n">Cedar</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="n">TBAC</span><span class="o">/</span><span class="n">RBAC</span><span class="p">)]</span>
+<span class="w">        </span><span class="n">UI</span><span class="p">[</span><span class="n">Admin</span><span class="w"> </span><span class="n">Console</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="p">(</span><span class="n">React</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">Tailwind</span><span class="p">)]</span>
+<span class="w">        </span><span class="n">DB</span><span class="p">[(</span><span class="n">PostgreSQL</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="n">Control</span><span class="w"> </span><span class="n">Plane</span><span class="w"> </span><span class="n">DB</span><span class="p">)]</span>
+<span class="w">        </span><span class="n">KV</span><span class="p">[(</span><span class="n">Redis</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="n">Sessions</span><span class="p">,</span><span class="w"> </span><span class="n">Cache</span><span class="p">,</span><span class="w"> </span><span class="n">Rate</span><span class="w"> </span><span class="kr">Limit</span><span class="p">)]</span>
+<span class="w">    </span><span class="kd">end</span>
+
+<span class="w">    </span><span class="n">subgraph</span><span class="w"> </span><span class="n">DP</span><span class="p">[</span><span class="kt">Data</span><span class="w"> </span><span class="n">Plane</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="n">Tenant</span><span class="o">/</span><span class="n">Environment</span><span class="w"> </span><span class="n">Isolation</span><span class="p">]</span>
+<span class="w">        </span><span class="n">direction</span><span class="w"> </span><span class="n">TB</span>
+<span class="w">        </span><span class="n">subgraph</span><span class="w"> </span><span class="n">T1</span><span class="p">[</span><span class="n">Tenant</span><span class="w"> </span><span class="n">A</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="kr">Shared</span><span class="w"> </span><span class="n">Pool</span><span class="p">]</span>
+<span class="w">            </span><span class="n">GW1</span><span class="p">[</span><span class="n">MCP</span><span class="w"> </span><span class="n">Gateway</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="p">(</span><span class="n">Obot</span><span class="o">/</span><span class="n">MintMCP</span><span class="o">/</span><span class="n">Custom</span><span class="p">)]</span>
+<span class="w">            </span><span class="n">FS1</span><span class="p">[</span><span class="n">Freshservice</span><span class="w"> </span><span class="n">MCP</span><span class="w"> </span><span class="n">Server</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="p">(</span><span class="n">Container</span><span class="w"> </span><span class="n">pool</span><span class="w"> </span><span class="n">compartilhado</span><span class="p">)]</span>
+<span class="w">            </span><span class="n">R1</span><span class="p">[(</span><span class="n">PostgreSQL</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">RLS</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="n">Tenant</span><span class="w"> </span><span class="n">A</span><span class="w"> </span><span class="n">configs</span><span class="p">)]</span>
+<span class="w">            </span><span class="n">TK1</span><span class="p">[(</span><span class="kt">Token</span><span class="w"> </span><span class="n">Vault</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="n">Freshservice</span><span class="w"> </span><span class="n">OAuth</span><span class="w"> </span><span class="n">tokens</span><span class="w"> </span><span class="n">AES</span><span class="o">-</span><span class="mi">256</span><span class="p">)]</span>
+<span class="w">        </span><span class="kd">end</span>
+<span class="w">        </span><span class="n">subgraph</span><span class="w"> </span><span class="n">T2</span><span class="p">[</span><span class="n">Tenant</span><span class="w"> </span><span class="n">B</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="n">Dedicated</span><span class="p">]</span>
+<span class="w">            </span><span class="n">GW2</span><span class="p">[</span><span class="n">MCP</span><span class="w"> </span><span class="n">Gateway</span><span class="w"> </span><span class="n">Cluster</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="n">HA</span><span class="p">]</span>
+<span class="w">            </span><span class="n">FS2</span><span class="p">[</span><span class="n">Freshservice</span><span class="w"> </span><span class="n">MCP</span><span class="w"> </span><span class="n">Server</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="n">Dedicated</span><span class="w"> </span><span class="n">replicas</span><span class="p">]</span>
+<span class="w">            </span><span class="n">R2</span><span class="p">[(</span><span class="n">PostgreSQL</span><span class="w"> </span><span class="n">Dedicated</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;+</span><span class="w"> </span><span class="n">Read</span><span class="w"> </span><span class="n">Replicas</span><span class="p">)]</span>
+<span class="w">            </span><span class="n">TK2</span><span class="p">[(</span><span class="kt">Token</span><span class="w"> </span><span class="n">Vault</span><span class="w"> </span><span class="n">Dedicated</span><span class="p">)]</span>
+<span class="w">            </span><span class="n">VPN</span><span class="p">[</span><span class="n">VPN</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="n">PrivateLink</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="n">BYOC</span><span class="w"> </span><span class="n">Option</span><span class="p">]</span>
+<span class="w">        </span><span class="kd">end</span>
+<span class="w">        </span><span class="n">subgraph</span><span class="w"> </span><span class="n">T3</span><span class="p">[</span><span class="n">Tenant</span><span class="w"> </span><span class="n">C</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="n">BYOC</span><span class="p">]</span>
+<span class="w">            </span><span class="n">GW3</span><span class="p">[</span><span class="n">MCP</span><span class="w"> </span><span class="n">Gateway</span><span class="w"> </span><span class="n">on</span><span class="w"> </span><span class="n">Customer</span><span class="w"> </span><span class="n">VPC</span><span class="p">]</span>
+<span class="w">            </span><span class="n">FS3</span><span class="p">[</span><span class="n">Freshservice</span><span class="w"> </span><span class="n">MCP</span><span class="w"> </span><span class="n">Server</span><span class="w"> </span><span class="n">on</span><span class="w"> </span><span class="n">Customer</span><span class="w"> </span><span class="n">VPC</span><span class="p">]</span>
+<span class="w">            </span><span class="n">R3</span><span class="p">[(</span><span class="n">Customer</span><span class="w"> </span><span class="n">DB</span><span class="p">)]</span>
+<span class="w">            </span><span class="n">TK3</span><span class="p">[(</span><span class="n">Customer</span><span class="w"> </span><span class="n">KMS</span><span class="p">)]</span>
+<span class="w">            </span><span class="n">TUN</span><span class="p">[</span><span class="n">Cloudflare</span><span class="w"> </span><span class="n">Tunnel</span><span class="w"> </span><span class="o">/&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="n">Reverse</span><span class="w"> </span><span class="n">Proxy</span><span class="p">]</span>
+<span class="w">        </span><span class="kd">end</span>
+<span class="w">    </span><span class="kd">end</span>
+
+<span class="w">    </span><span class="n">API</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">PM</span>
+<span class="w">    </span><span class="n">PM</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">GW1</span>
+<span class="w">    </span><span class="n">PM</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">GW2</span>
+<span class="w">    </span><span class="n">PM</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">TUN</span>
+<span class="w">    </span><span class="n">BM</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">API</span>
+<span class="w">    </span><span class="n">RG</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">API</span>
+<span class="w">    </span><span class="n">AM</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">API</span>
+<span class="w">    </span><span class="n">UI</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">API</span>
+<span class="w">    </span><span class="n">DB</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">API</span>
+<span class="w">    </span><span class="n">KV</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">API</span>
+</code></pre></div>
+
+<h3 id="componentes-chave-freshservice-specific"><a class="toclink" href="#componentes-chave-freshservice-specific">Componentes-chave (Freshservice-specific)</a><a class="headerlink" href="#componentes-chave-freshservice-specific" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Componente</th>
+<th>Tecnologia Sugerida</th>
+<th>Responsabilidade</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>API Gateway</strong></td>
+<td>Kong / Traefik</td>
+<td>Rate limit (respeita limites Freshservice API), authZ, observabilidade, roteamento MCP</td>
+</tr>
+<tr>
+<td><strong>Provisioning Manager</strong></td>
+<td>Go + Temporal</td>
+<td>Cria tenant/ambiente, provisiona gateway, deploya Freshservice MCP Server, configura OAuth Freshservice, emite <code>tenant.ready</code></td>
+</tr>
+<tr>
+<td><strong>Billing &amp; Metering</strong></td>
+<td>Stripe Billing + Metering / Lago</td>
+<td>Tool-call tracking por tool Freshservice (ticket.create, asset.search, etc.), invoice, usage-based overage</td>
+</tr>
+<tr>
+<td><strong>Policy Engine</strong></td>
+<td>OPA (Rego)</td>
+<td>TBAC/RBAC: qual tool Freshservice cada role pode chamar, rate limit por tool, data masking</td>
+</tr>
+<tr>
+<td><strong>Admin Console</strong></td>
+<td>React + Refine</td>
+<td>Self-service: conectar domínio Freshservice, configurar OAuth, ver logs, rotacionar tokens, gerenciar catálogo tools</td>
+</tr>
+<tr>
+<td><strong>MCP Gateway</strong></td>
+<td><strong>Obot (open source)</strong> / MintMCP / Custom</td>
+<td>Termina Streamable HTTP, injeta auth Freshservice, roteia para servers, audit log, rate limit</td>
+</tr>
+<tr>
+<td><strong>Freshservice MCP Server Runtime</strong></td>
+<td>Container (K8s/Docker) - <strong>nosso código Python/Go</strong></td>
+<td>Implementa tools Freshservice: tickets.<em>, assets.</em>, catalog.<em>, changes.</em>, kb.<em>, cmdb.</em>, workflows.*</td>
+</tr>
+<tr>
+<td><strong>Registry/Catalog</strong></td>
+<td>PostgreSQL + pgvector</td>
+<td>Versionamento do Freshservice MCP Server, security scan, signing, tenant allowlist</td>
+</tr>
+<tr>
+<td><strong>Token Vault</strong></td>
+<td>HashiCorp Vault / AWS Secrets Manager</td>
+<td>Armazena <strong>OAuth refresh tokens Freshservice</strong> por tenant/ambiente, rotação automática</td>
+</tr>
+<tr>
+<td><strong>Armazenamento Tenant</strong></td>
+<td>PostgreSQL (RLS) ou DB dedicado</td>
+<td>Configs Freshservice (domínio, API keys), mappings, audit logs</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="3-freshservice-mcp-server-tools-capabilities"><a class="toclink" href="#3-freshservice-mcp-server-tools-capabilities">3. Freshservice MCP Server — Tools &amp; Capabilities</a><a class="headerlink" href="#3-freshservice-mcp-server-tools-capabilities" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code>mindmap
+  root((Freshservice&lt;br/&gt;MCP Server))
+    Tickets
+      ticket.create
+      ticket.get
+      ticket.list
+      ticket.update
+      ticket.add_note
+      ticket.add_attachment
+      ticket.approve
+      ticket.associate_asset
+    Assets
+      asset.create
+      asset.get
+      asset.list
+      asset.update
+      asset.associate_ticket
+      asset.lifecycle
+    Catalog
+      service_catalog.list
+      service_item.get
+      service_item.order
+      approval.get
+    Changes
+      change.create
+      change.get
+      change.list
+      change.approve
+      change.task.*
+    Knowledge Base
+      article.search
+      article.get
+      article.create
+      category.list
+    CMDB
+      ci.create
+      ci.get
+      ci.relationship.*
+    Workflows
+      workflow.list
+      workflow.trigger
+      workflow.get_execution
+    Admin
+      agent.list
+      group.list
+      requester.list
+      business_hour.*
+</code></pre></div>
+
+<h3 id="tool-definitions-mcp-spec"><a class="toclink" href="#tool-definitions-mcp-spec">Tool Definitions (MCP Spec)</a><a class="headerlink" href="#tool-definitions-mcp-spec" title="Permanent link">&para;</a></h3>
+<p><strong>workflow.list</strong></p>
+<div class="highlight"><pre><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">"name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"workflow.list"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"description"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Lista workflows disponíveis no tenant Freshservice"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"inputSchema"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">"type"</span><span class="p">:</span><span class="w"> </span><span class="s2">"object"</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"properties"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="nt">"type"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">"type"</span><span class="p">:</span><span class="w"> </span><span class="s2">"string"</span><span class="p">,</span><span class="w"> </span><span class="nt">"enum"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">"automator"</span><span class="p">,</span><span class="w"> </span><span class="s2">"engine"</span><span class="p">,</span><span class="w"> </span><span class="s2">"catalog"</span><span class="p">]</span><span class="w"> </span><span class="p">}</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">  </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<p><strong>workflow.trigger</strong></p>
+<div class="highlight"><pre><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">"name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"workflow.trigger"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"description"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Dispara execução de workflow com parâmetros"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"inputSchema"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">"type"</span><span class="p">:</span><span class="w"> </span><span class="s2">"object"</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"properties"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="nt">"workflow_id"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">"type"</span><span class="p">:</span><span class="w"> </span><span class="s2">"integer"</span><span class="w"> </span><span class="p">},</span>
+<span class="w">      </span><span class="nt">"input_parameters"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">"type"</span><span class="p">:</span><span class="w"> </span><span class="s2">"object"</span><span class="w"> </span><span class="p">},</span>
+<span class="w">      </span><span class="nt">"context"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">"type"</span><span class="p">:</span><span class="w"> </span><span class="s2">"object"</span><span class="p">,</span><span class="w"> </span><span class="nt">"description"</span><span class="p">:</span><span class="w"> </span><span class="s2">"ticket_id, requester_email, etc."</span><span class="w"> </span><span class="p">}</span>
+<span class="w">    </span><span class="p">},</span>
+<span class="w">    </span><span class="nt">"required"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">"workflow_id"</span><span class="p">]</span>
+<span class="w">  </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<p><strong>workflow.get_execution</strong></p>
+<div class="highlight"><pre><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">"name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"workflow.get_execution"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"description"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Consulta status/resultado de execução"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"inputSchema"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">"type"</span><span class="p">:</span><span class="w"> </span><span class="s2">"object"</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"properties"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="nt">"execution_id"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">"type"</span><span class="p">:</span><span class="w"> </span><span class="s2">"string"</span><span class="w"> </span><span class="p">}</span>
+<span class="w">    </span><span class="p">},</span>
+<span class="w">    </span><span class="nt">"required"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">"execution_id"</span><span class="p">]</span>
+<span class="w">  </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<blockquote>
+<p><strong>Nota</strong>: O <em>Workflow Engine</em> (visual, drag-drop) é <strong>feature gated</strong> — só aparece na API se o tenant tiver o add-on ativo (plano Enterprise/Forest). Verifique em <strong>Admin → Workflow Automator → "New Workflow"</strong>.</p>
+</blockquote>
+<hr />
+<h2 id="4-modelo-de-isolamento-um-mcp-server-por-ambiente-sandboxprod"><a class="toclink" href="#4-modelo-de-isolamento-um-mcp-server-por-ambiente-sandboxprod">4. Modelo de Isolamento: <strong>Um MCP Server por Ambiente (Sandbox/Prod)</strong></a><a class="headerlink" href="#4-modelo-de-isolamento-um-mcp-server-por-ambiente-sandboxprod" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Nível</th>
+<th>O que é isolado</th>
+<th>Como é feito (VPS → K8s)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Organização (Cliente)</strong></td>
+<td>Conta comercial, plano, billing, SSO config, owners</td>
+<td>Row-level security no Postgres (<code>organization_id</code>)</td>
+</tr>
+<tr>
+<td><strong>Ambiente</strong> (Sandbox / Production)</td>
+<td>Domínio Freshservice distinto, OAuth App distinto, quota de tool calls, feature flags, versão do MCP Server</td>
+<td><strong>Schema Postgres dedicado</strong> (<code>org_acme_sandbox</code>, <code>org_acme_prod</code>) + <strong>Vault namespace/path</strong> (<code>secret/org/acme/sandbox/fs-oauth</code>, <code>.../prod/</code>) + <strong>Obot Skill registration</strong> com config apontando para o path correto</td>
+</tr>
+<tr>
+<td><strong>MCP Server Instance</strong></td>
+<td>Processo/container que executa as tools</td>
+<td><strong>Shared pool</strong> (Starter/Professional) → mesmo container atende múltiplos ambientes via header <code>X-Environment-ID</code>; <strong>Dedicated/BYOC</strong> → container/pod exclusivo por ambiente</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Por que por ambiente e não por cliente?</strong><br />
+- Sandbox e Prod têm <strong>domínios Freshservice diferentes</strong>, <strong>OAuth Apps diferentes</strong>, <strong>rate limits diferentes</strong>, <strong>dados diferentes</strong>.<br />
+- Permite promover versão do MCP Server de sandbox → prod com canary.<br />
+- Isolamento de falha: bug no sandbox não derruba prod.<br />
+- Billing e quota são configurados por ambiente.</p>
+<hr />
+<h2 id="5-obot-skill-registration-detalhado"><a class="toclink" href="#5-obot-skill-registration-detalhado">5. Obot — Skill Registration Detalhado</a><a class="headerlink" href="#5-obot-skill-registration-detalhado" title="Permanent link">&para;</a></h2>
+<p>O Obot trata <strong>cada MCP Server</strong> como uma <strong>Skill</strong>. No provisionamento de um ambiente, o Control Plane faz:</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># 1. Registrar a skill (uma vez por versão do FS MCP Server)</span>
+curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>http://obot:8080/api/v1/skills<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-H<span class="w"> </span><span class="s2">"Authorization: Bearer </span><span class="nv">$OBOT_ADMIN_TOKEN</span><span class="s2">"</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-d<span class="w"> </span><span class="s1">'{</span>
+<span class="s1">    "name": "freshservice-mcp",</span>
+<span class="s1">    "version": "1.2.0",</span>
+<span class="s1">    "description": "Freshservice ITSM tools (tickets, assets, catalog, changes, kb, cmdb, workflows)",</span>
+<span class="s1">    "transport": "streamable-http",</span>
+<span class="s1">    "endpoint": "http://fs-mcp-server:8081/mcp",   # interno ao Docker/K8s</span>
+<span class="s1">    "auth": {</span>
+<span class="s1">      "type": "oauth2",</span>
+<span class="s1">      "token_vault_path": "secret/org/{{org_id}}/{{env_id}}/fs-oauth"</span>
+<span class="s1">    },</span>
+<span class="s1">    "schema": { ... }   # JSON Schema completo das tools</span>
+<span class="s1">  }'</span>
+</code></pre></div>
+
+<div class="highlight"><pre><span></span><code><span class="c1"># 2. Criar instância da skill para o ambiente (binding org+env → skill version)</span>
+curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>http://obot:8080/api/v1/skill-instances<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-H<span class="w"> </span><span class="s2">"Authorization: Bearer </span><span class="nv">$OBOT_ADMIN_TOKEN</span><span class="s2">"</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-d<span class="w"> </span><span class="s1">'{</span>
+<span class="s1">    "skill_name": "freshservice-mcp",</span>
+<span class="s1">    "skill_version": "1.2.0",</span>
+<span class="s1">    "tenant_id": "org_acme",</span>
+<span class="s1">    "environment_id": "sandbox",</span>
+<span class="s1">    "config": {</span>
+<span class="s1">      "freshservice_domain": "acme-sandbox.freshservice.com",</span>
+<span class="s1">      "vault_path": "secret/org/acme/sandbox/fs-oauth",</span>
+<span class="s1">      "rate_limit_rpm": 100</span>
+<span class="s1">    }</span>
+<span class="s1">  }'</span>
+</code></pre></div>
+
+<p><strong>Resultado</strong>: Obot expõe endpoint único por ambiente<br />
+<code>https://acme-sandbox.mcp.seudominio.com/mcp</code> (ou header <code>X-Tenant-ID: org_acme</code>, <code>X-Environment-ID: sandbox</code>) que roteia para a skill instance correta, injeta o token Freshservice do Vault e executa a tool.</p>
+<p><strong>Vantagens dessa abordagem</strong>:
+- <strong>Versionamento</strong>: múltiplas versões do FS MCP Server convivem; promoção sandbox→prod = trocar <code>skill_version</code> na instância.
+- <strong>Hot reload</strong>: novo deploy da skill version → <code>POST /api/v1/skill-instances/{id}/reload</code> sem reiniciar gateway.
+- <strong>Observabilidade por instância</strong>: logs, métricas, traces segregados por <code>tenant_id+environment_id</code>.</p>
+<hr />
+<h2 id="6-validacao-inicial-em-vps-sem-kubernetes"><a class="toclink" href="#6-validacao-inicial-em-vps-sem-kubernetes">6. Validação Inicial em VPS (Sem Kubernetes)</a><a class="headerlink" href="#6-validacao-inicial-em-vps-sem-kubernetes" title="Permanent link">&para;</a></h2>
+<h3 id="stack-minima-docker-compose"><a class="toclink" href="#stack-minima-docker-compose">Stack Mínima (Docker Compose)</a><a class="headerlink" href="#stack-minima-docker-compose" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><span class="c1"># docker-compose.yml — VPS single node</span>
+<span class="nt">version</span><span class="p">:</span><span class="w"> </span><span class="s">"3.8"</span>
+<span class="nt">services</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">postgres</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">image</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">pgvector/pgvector:pg16</span>
+<span class="w">    </span><span class="nt">environment</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">POSTGRES_DB</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">control_plane</span>
+<span class="w">      </span><span class="nt">POSTGRES_USER</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">cp_user</span>
+<span class="w">      </span><span class="nt">POSTGRES_PASSWORD</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">${PG_PASSWORD}</span>
+<span class="w">    </span><span class="nt">volumes</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">pgdata</span><span class="p p-Indicator">:</span><span class="nv">/var/lib/postgresql/data</span><span class="p p-Indicator">]</span>
+<span class="w">    </span><span class="nt">healthcheck</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">"CMD-SHELL"</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">"pg_isready</span><span class="nv"> </span><span class="s">-U</span><span class="nv"> </span><span class="s">cp_user"</span><span class="p p-Indicator">]</span>
+
+<span class="w">  </span><span class="nt">redis</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">image</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">redis:7-alpine</span>
+<span class="w">    </span><span class="nt">command</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">redis-server --appendonly yes</span>
+<span class="w">    </span><span class="nt">volumes</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">redisdata</span><span class="p p-Indicator">:</span><span class="nv">/data</span><span class="p p-Indicator">]</span>
+<span class="w">    </span><span class="nt">healthcheck</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">"CMD"</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">"redis-cli"</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">"ping"</span><span class="p p-Indicator">]</span>
+
+<span class="w">  </span><span class="nt">vault</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">image</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">hashicorp/vault:1.15</span>
+<span class="w">    </span><span class="nt">cap_add</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">IPC_LOCK</span><span class="p p-Indicator">]</span>
+<span class="w">    </span><span class="nt">environment</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">VAULT_DEV_ROOT_TOKEN_ID</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">${VAULT_ROOT_TOKEN}</span>
+<span class="w">      </span><span class="nt">VAULT_DEV_LISTEN_ADDRESS</span><span class="p">:</span><span class="w"> </span><span class="s">"0.0.0.0:8200"</span>
+<span class="w">    </span><span class="nt">ports</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">"8200:8200"</span><span class="p p-Indicator">]</span>
+<span class="w">    </span><span class="nt">command</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">server -dev</span>
+
+<span class="w">  </span><span class="nt">obot</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">image</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ghcr.io/obot-platform/obot:latest</span>
+<span class="w">    </span><span class="nt">depends_on</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">postgres</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">redis</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">vault</span><span class="p p-Indicator">]</span>
+<span class="w">    </span><span class="nt">environment</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">DATABASE_URL</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">postgres://cp_user:***@postgres:5432/control_plane</span>
+<span class="w">      </span><span class="nt">REDIS_URL</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">redis://redis:6379</span>
+<span class="w">      </span><span class="nt">VAULT_ADDR</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">http://vault:8200</span>
+<span class="w">      </span><span class="nt">VAULT_TOKEN</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">${VAULT_ROOT_TOKEN}</span>
+<span class="w">      </span><span class="nt">OBOT_AUTH_PROVIDERS</span><span class="p">:</span><span class="w"> </span><span class="s">"oidc,github,google"</span>
+<span class="w">      </span><span class="nt">OBOT_HOST</span><span class="p">:</span><span class="w"> </span><span class="s">"0.0.0.0"</span>
+<span class="w">      </span><span class="nt">OBOT_PORT</span><span class="p">:</span><span class="w"> </span><span class="s">"8080"</span>
+<span class="w">    </span><span class="nt">ports</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">"8080:8080"</span><span class="p p-Indicator">]</span>
+
+<span class="w">  </span><span class="nt">fs-mcp-server</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">build</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">./fs-mcp-server</span>
+<span class="w">    </span><span class="nt">depends_on</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">vault</span><span class="p p-Indicator">]</span>
+<span class="w">    </span><span class="nt">environment</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">VAULT_ADDR</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">http://vault:8200</span>
+<span class="w">      </span><span class="nt">VAULT_TOKEN</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">${VAULT_ROOT_TOKEN}</span>
+<span class="w">      </span><span class="nt">LOG_LEVEL</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">info</span>
+
+<span class="w">  </span><span class="nt">nginx</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">image</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">nginx:alpine</span>
+<span class="w">    </span><span class="nt">ports</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">"80:80"</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">"443:443"</span><span class="p p-Indicator">]</span>
+<span class="w">    </span><span class="nt">volumes</span><span class="p">:</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">./nginx.conf:/etc/nginx/nginx.conf:ro</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">./certbot:/etc/letsencrypt:ro</span>
+<span class="w">    </span><span class="nt">depends_on</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">obot</span><span class="p p-Indicator">]</span>
+
+<span class="w">  </span><span class="nt">control-plane-api</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">build</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">./control-plane-api</span>
+<span class="w">    </span><span class="nt">depends_on</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">postgres</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">redis</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">vault</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">obot</span><span class="p p-Indicator">]</span>
+<span class="w">    </span><span class="nt">environment</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">DATABASE_URL</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">postgres://cp_user:***@postgres:5432/control_plane</span>
+<span class="w">      </span><span class="nt">REDIS_URL</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">redis://redis:6379</span>
+<span class="w">      </span><span class="nt">VAULT_ADDR</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">http://vault:8200</span>
+<span class="w">      </span><span class="nt">VAULT_TOKEN</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">${VAULT_ROOT_TOKEN}</span>
+<span class="w">      </span><span class="nt">OBOT_URL</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">http://obot:8080</span>
+<span class="w">      </span><span class="nt">STRIPE_SECRET_KEY</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">${STRIPE_SECRET_KEY}</span>
+<span class="w">    </span><span class="nt">ports</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">"3000:3000"</span><span class="p p-Indicator">]</span>
+
+<span class="w">  </span><span class="nt">admin-console</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">build</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">./admin-console</span>
+<span class="w">    </span><span class="nt">depends_on</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">control-plane-api</span><span class="p p-Indicator">]</span>
+<span class="w">    </span><span class="nt">ports</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">"3001:3000"</span><span class="p p-Indicator">]</span>
+
+<span class="nt">volumes</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">pgdata</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">redisdata</span><span class="p">:</span>
+</code></pre></div>
+
+<h3 id="o-que-perde-na-vps-recupera-no-k8s-depois"><a class="toclink" href="#o-que-perde-na-vps-recupera-no-k8s-depois">O que <strong>perde</strong> na VPS (recupera no K8s depois)</a><a class="headerlink" href="#o-que-perde-na-vps-recupera-no-k8s-depois" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Feature</th>
+<th>VPS (Docker Compose)</th>
+<th>K8s (Produção)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Isolamento forte rede/CPU/RAM por ambiente</td>
+<td>❌ Compartilhado</td>
+<td>✅ NetworkPolicy, ResourceQuota, LimitRange</td>
+</tr>
+<tr>
+<td>HA automático (restart, node failure)</td>
+<td>❌ Single point</td>
+<td>✅ ReplicaSets, PodDisruptionBudget, multi-AZ</td>
+</tr>
+<tr>
+<td>Secrets rotation automática</td>
+<td>Manual / cron</td>
+<td>✅ Vault Agent Injector + CSI</td>
+</tr>
+<tr>
+<td>TLS automático</td>
+<td>Certbot manual</td>
+<td>✅ cert-manager + Let's Encrypt</td>
+</tr>
+<tr>
+<td>Observabilidade unificada</td>
+<td>Stdout + Loki local</td>
+<td>✅ Grafana Stack (Loki/Tempo/Mimir) + ServiceMonitor</td>
+</tr>
+<tr>
+<td>Provisioning "&lt; 60s"</td>
+<td>Script shell + API</td>
+<td>✅ Temporal workflow + K8s Operator</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p><strong>Nenhum bloqueador</strong> — Control Plane API continua <strong>igual</strong>; só o <em>Provisioning Engine</em> troca "criar namespace K8s" por "criar schema PG + path Vault + entry nginx".</p>
+</blockquote>
+<h3 id="migracao-vps-k8s-quando-chegar-a-hora"><a class="toclink" href="#migracao-vps-k8s-quando-chegar-a-hora">Migração VPS → K8s (quando chegar a hora)</a><a class="headerlink" href="#migracao-vps-k8s-quando-chegar-a-hora" title="Permanent link">&para;</a></h3>
+<ol>
+<li>Mesmo <code>Dockerfile</code> do FS MCP Server → imagem no registry.  </li>
+<li><code>helm repo add obot https://charts.obot.ai</code> substitui container <code>obot</code>.  </li>
+<li>Vault → modo HA (Raft) ou managed (HCP Vault / AWS Secrets Manager).  </li>
+<li>Postgres → Cloud SQL / RDS / CloudNativePG operator.  </li>
+<li>Provisioning Engine troca <code>docker run</code> / <code>psql</code> por <code>kubectl apply</code> (Namespace, Secret, Deployment, Service, NetworkPolicy).  </li>
+<li>DNS wildcard (<code>*.mcp.seudominio.com</code>) → Ingress NGINX + cert-manager.</li>
+</ol>
+<hr />
+<h2 id="7-stacks-de-tecnologia-linguagens-sugeridas"><a class="toclink" href="#7-stacks-de-tecnologia-linguagens-sugeridas">7. Stacks de Tecnologia &amp; Linguagens Sugeridas</a><a class="headerlink" href="#7-stacks-de-tecnologia-linguagens-sugeridas" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Camada</th>
+<th>Linguagem/Framework</th>
+<th>Justificativa</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Control Plane API</strong></td>
+<td><strong>Go (Chi/Gin) + Temporal</strong> ou <strong>TypeScript (NestJS/Fastify) + Temporal</strong></td>
+<td>Go: performance, binário único, ecossistema K8s. TS: shared types com Admin Console, produtividade full-stack.</td>
+</tr>
+<tr>
+<td><strong>Admin Console</strong></td>
+<td><strong>React 18 + TypeScript + Refine (admin framework) + Tailwind + TanStack Query</strong></td>
+<td>Refine acelera CRUD, auth, RBAC, audit logs; Tailwind para UI consistente.</td>
+</tr>
+<tr>
+<td><strong>Provisioning Engine</strong></td>
+<td><strong>Go + Temporal SDK</strong> (workflows duráveis, retries, visibility)</td>
+<td>Temporal garante idempotência, saga pattern, replay.</td>
+</tr>
+<tr>
+<td><strong>Freshservice MCP Server</strong></td>
+<td><strong>Python (FastMCP / mcp-sdk-python + FastAPI)</strong> ou <strong>Go (mcp-go + chi)</strong></td>
+<td>Python: ecossistema Freshservice (requests/httpx), tipagem, dev rápido. Go: throughput, single binary, menor memória.</td>
+</tr>
+<tr>
+<td><strong>Obot Gateway</strong></td>
+<td><strong>Go (já vem compilado)</strong> — configuramos via API/CRDs</td>
+<td>Não precisamos mexer no código do Obot a menos que precisemos de plugin custom.</td>
+</tr>
+<tr>
+<td><strong>Registry &amp; Catalog</strong></td>
+<td><strong>PostgreSQL + pgvector</strong> (metadata + embeddings para busca semântica)</td>
+<td>pgvector nativo, sem serviço extra.</td>
+</tr>
+<tr>
+<td><strong>Token Vault</strong></td>
+<td><strong>HashiCorp Vault</strong> (dev mode na VPS, HA/Raft em prod)</td>
+<td>Namespaces, KV v2, lease/rotation, audit log nativo.</td>
+</tr>
+<tr>
+<td><strong>Billing &amp; Metering</strong></td>
+<td><strong>Stripe Billing + Stripe Metering</strong> (ou <strong>Lago</strong> open-source se quiser self-host)</td>
+<td>Stripe: portal self-service, invoices, tax, x402 crypto opcional.</td>
+</tr>
+<tr>
+<td><strong>Observabilidade</strong></td>
+<td><strong>OpenTelemetry Collector → Loki/Tempo/Mimir (Grafana Stack)</strong></td>
+<td>Padrão CNCF, vendor-neutral.</td>
+</tr>
+<tr>
+<td><strong>CI/CD</strong></td>
+<td><strong>GitHub Actions + ArgoCD (GitOps)</strong></td>
+<td>Arroba de ambientes, promoção sandbox→prod via PR.</td>
+</tr>
+<tr>
+<td><strong>Infra as Code</strong></td>
+<td><strong>Terraform (cloud infra) + Helm (K8s apps)</strong></td>
+<td>Declarativo, versionado.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="decisao-go-vs-typescript-no-control-plane"><a class="toclink" href="#decisao-go-vs-typescript-no-control-plane">Decisão Go vs TypeScript no Control Plane</a><a class="headerlink" href="#decisao-go-vs-typescript-no-control-plane" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Critério</th>
+<th>Go</th>
+<th>TypeScript</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Performance/Throughput</td>
+<td>★★★★★</td>
+<td>★★★☆☆</td>
+</tr>
+<tr>
+<td>Shared types com Frontend</td>
+<td>★★☆☆☆ (protobuf/OpenAPI)</td>
+<td>★★★★★ (compartilha Zod/TS types)</td>
+</tr>
+<tr>
+<td>Ecossistema Temporal</td>
+<td>★★★★★ (SDK maduro)</td>
+<td>★★★★☆ (SDK bom)</td>
+</tr>
+<tr>
+<td>Time-to-market (solo dev)</td>
+<td>★★★★☆</td>
+<td>★★★★★</td>
+</tr>
+<tr>
+<td>Hiring (Brasil)</td>
+<td>★★★★☆</td>
+<td>★★★★★</td>
+</tr>
+<tr>
+<td><strong>Recomendação</strong></td>
+<td>Se prioriza <strong>performance, custos de infra, single binary</strong></td>
+<td>Se prioriza <strong>velocidade de feature, shared types, full-stack único</strong></td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p><strong>Minha sugestão</strong>: <strong>TypeScript (NestJS/Fastify) + Temporal</strong> para o Control Plane API + Admin Console no mesmo monorepo (shared packages <code>types</code>, <code>config</code>, <code>api-client</code>). O FS MCP Server em <strong>Python (FastMCP)</strong> — ecossistema Freshservice mais maduro, tipagem Pydantic, fácil para data engineers.</p>
+</blockquote>
+<hr />
+<h2 id="8-monorepo-vs-multi-repo-estrategia-para-multiplos-mcp-servers"><a class="toclink" href="#8-monorepo-vs-multi-repo-estrategia-para-multiplos-mcp-servers">8. Monorepo vs Multi-repo — Estratégia para Múltiplos MCP Servers</a><a class="headerlink" href="#8-monorepo-vs-multi-repo-estrategia-para-multiplos-mcp-servers" title="Permanent link">&para;</a></h2>
+<h3 id="cenario-plataforma-comeca-com-freshservice-depois-adiciona-jira-mcp-server-postgresql-mcp-server-n8n-mcp-server-etc"><a class="toclink" href="#cenario-plataforma-comeca-com-freshservice-depois-adiciona-jira-mcp-server-postgresql-mcp-server-n8n-mcp-server-etc">Cenário: Plataforma começa com Freshservice, depois adiciona <strong>Jira MCP Server</strong>, <strong>PostgreSQL MCP Server</strong>, <strong>n8n MCP Server</strong>, etc.</a><a class="headerlink" href="#cenario-plataforma-comeca-com-freshservice-depois-adiciona-jira-mcp-server-postgresql-mcp-server-n8n-mcp-server-etc" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Abordagem</th>
+<th>Estrutura</th>
+<th>Prós</th>
+<th>Contras</th>
+<th>Quando usar</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Monorepo único</strong> (<code>freshservice-mcp-platform/</code>)</td>
+<td><code>apps/control-plane-api</code>, <code>apps/admin-console</code>, <code>apps/fs-mcp-server</code>, <code>apps/jira-mcp-server</code>, <code>packages/shared-types</code>, <code>packages/tsconfig</code>, <code>infra/</code></td>
+<td>• Shared types &amp; config (zero drift) <br>• Atomic commits cross-cutting (ex: mudança no schema de provisioning) <br>• CI/CD único, cache turbo <br>• Fácil refatoração de libs internas</td>
+<td>• Build time cresce <br>• Time grande → conflitos de merge <br>• Deploy acoplado (precisa tooling: Turborepo, Nx, Bazel)</td>
+<td><strong>Time ≤ 8 devs</strong>, <strong>ciclo de release sincronizado</strong>, <strong>forte acoplamento de domínio</strong> (todos MCP servers seguem mesmo contrato de provisioning, auth, billing).</td>
+</tr>
+<tr>
+<td><strong>Multi-repo (polyrepo)</strong></td>
+<td><code>control-plane/</code>, <code>admin-console/</code>, <code>fs-mcp-server/</code>, <code>jira-mcp-server/</code>, <code>shared-packages/</code> (publicado no npm/GitHub Packages)</td>
+<td>• Isolamento de ciclo de vida <br>• Teams autônomos <br>• Deploy independente <br>• Menor blast radius</td>
+<td>• Versionamento de shared packages (dependency hell) <br>• Duplicação de config (eslint, tsconfig, dockerfiles) <br>• Mudança cross-repo = PRs coordenados</td>
+<td><strong>Time &gt; 8 devs</strong>, <strong>domínios distintos</strong> (ex: time ITSM cuida FS, time DevTools cuida Jira/GitHub), <strong>releases independentes</strong>.</td>
+</tr>
+<tr>
+<td><strong>Híbrido (recomendado para vocês)</strong></td>
+<td><strong>Monorepo para Control Plane + Admin Console + Provisioning + Infra</strong> (core da plataforma) + <strong>Repositórios separados por MCP Server</strong> (<code>fs-mcp-server</code>, <code>jira-mcp-server</code>, <code>pg-mcp-server</code>) publicados como <strong>Docker images + OpenAPI/JSON Schema</strong> no Registry privado.</td>
+<td>• Core da plataforma (billing, auth, provisioning) versionado junto <br>• Cada MCP Server evolui no seu ritmo, linguagens diferentes (Python, Go, TS) <br>• Control Plane consome apenas <strong>artefatos imutáveis</strong> (image + schema) → desacoplamento real <br>• Shared packages apenas para <code>types</code> (Zod/JSON Schema) e <code>api-client</code> TS/Go</td>
+<td>• Dois fluxos de CI/CD (core + servers) <br>• Precisa de Registry privado robusto (já planejado)</td>
+<td><strong>Vocês agora</strong>: time pequeno, core acoplado, servers independentes.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="estrutura-hibrida-pratica"><a class="toclink" href="#estrutura-hibrida-pratica">Estrutura Híbrida Prática</a><a class="headerlink" href="#estrutura-hibrida-pratica" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><span class="err">#</span><span class="w"> </span><span class="nx">Repo</span><span class="w"> </span><span class="mi">1</span><span class="p">:</span><span class="w"> </span><span class="nx">mcp</span><span class="o">-</span><span class="nx">control</span><span class="o">-</span><span class="nx">plane</span><span class="w"> </span><span class="p">(</span><span class="nx">monorepo</span><span class="p">)</span>
+<span class="nx">mcp</span><span class="o">-</span><span class="nx">control</span><span class="o">-</span><span class="nx">plane</span><span class="o">/</span>
+<span class="err">├──</span><span class="w"> </span><span class="nx">apps</span><span class="o">/</span>
+<span class="err">│</span><span class="w">   </span><span class="err">├──</span><span class="w"> </span><span class="nx">control</span><span class="o">-</span><span class="nx">plane</span><span class="o">-</span><span class="kn">api</span><span class="o">/</span><span class="w">      </span><span class="err">#</span><span class="w"> </span><span class="nx">Go</span><span class="w"> </span><span class="nx">ou</span><span class="w"> </span><span class="nx">TS</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nx">Temporal</span>
+<span class="err">│</span><span class="w">   </span><span class="err">├──</span><span class="w"> </span><span class="nx">admin</span><span class="o">-</span><span class="nx">console</span><span class="o">/</span><span class="w">          </span><span class="err">#</span><span class="w"> </span><span class="nx">React</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nx">Refine</span>
+<span class="err">│</span><span class="w">   </span><span class="err">└──</span><span class="w"> </span><span class="nx">provisioning</span><span class="o">-</span><span class="nx">engine</span><span class="o">/</span><span class="w">    </span><span class="err">#</span><span class="w"> </span><span class="nx">Temporal</span><span class="w"> </span><span class="nx">workflows</span>
+<span class="err">├──</span><span class="w"> </span><span class="nx">packages</span><span class="o">/</span>
+<span class="err">│</span><span class="w">   </span><span class="err">├──</span><span class="w"> </span><span class="nx">shared</span><span class="o">-</span><span class="nx">types</span><span class="o">/</span><span class="w">           </span><span class="err">#</span><span class="w"> </span><span class="nx">Zod</span><span class="w"> </span><span class="nx">schemas</span><span class="p">,</span><span class="w"> </span><span class="nx">OpenAPI</span><span class="w"> </span><span class="nx">types</span>
+<span class="err">│</span><span class="w">   </span><span class="err">├──</span><span class="w"> </span><span class="kn">api</span><span class="o">-</span><span class="nx">client</span><span class="o">/</span><span class="w">             </span><span class="err">#</span><span class="w"> </span><span class="nx">TS</span><span class="o">/</span><span class="nx">Go</span><span class="w"> </span><span class="nx">client</span><span class="w"> </span><span class="nx">p</span><span class="o">/</span><span class="w"> </span><span class="nx">Control</span><span class="w"> </span><span class="nx">Plane</span><span class="w"> </span><span class="nx">API</span>
+<span class="err">│</span><span class="w">   </span><span class="err">└──</span><span class="w"> </span><span class="nx">config</span><span class="o">/</span><span class="w">                 </span><span class="err">#</span><span class="w"> </span><span class="nx">Env</span><span class="w"> </span><span class="nx">validation</span><span class="w"> </span><span class="p">(</span><span class="nx">zod</span><span class="p">)</span>
+<span class="err">├──</span><span class="w"> </span><span class="nx">infra</span><span class="o">/</span>
+<span class="err">│</span><span class="w">   </span><span class="err">├──</span><span class="w"> </span><span class="nx">docker</span><span class="o">-</span><span class="nx">compose</span><span class="p">.</span><span class="nx">yml</span><span class="w">      </span><span class="err">#</span><span class="w"> </span><span class="nx">VPS</span><span class="w"> </span><span class="nx">dev</span>
+<span class="err">│</span><span class="w">   </span><span class="err">├──</span><span class="w"> </span><span class="nx">helm</span><span class="o">/</span><span class="w">                   </span><span class="err">#</span><span class="w"> </span><span class="nx">K8s</span><span class="w"> </span><span class="nx">prod</span>
+<span class="err">│</span><span class="w">   </span><span class="err">└──</span><span class="w"> </span><span class="nx">terraform</span><span class="o">/</span><span class="w">              </span><span class="err">#</span><span class="w"> </span><span class="nx">Cloud</span><span class="w"> </span><span class="nx">infra</span>
+<span class="err">└──</span><span class="w"> </span><span class="nx">turbo</span><span class="p">.</span><span class="nx">json</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="nx">nx</span><span class="p">.</span><span class="nx">json</span><span class="w">        </span><span class="err">#</span><span class="w"> </span><span class="nx">Turborepo</span><span class="w"> </span><span class="nx">ou</span><span class="w"> </span><span class="nx">Nx</span>
+
+<span class="err">#</span><span class="w"> </span><span class="nx">Repo</span><span class="w"> </span><span class="mi">2</span><span class="p">:</span><span class="w"> </span><span class="nx">fs</span><span class="o">-</span><span class="nx">mcp</span><span class="o">-</span><span class="nx">server</span><span class="w"> </span><span class="p">(</span><span class="nx">independente</span><span class="p">)</span>
+<span class="nx">fs</span><span class="o">-</span><span class="nx">mcp</span><span class="o">-</span><span class="nx">server</span><span class="o">/</span>
+<span class="err">├──</span><span class="w"> </span><span class="nx">src</span><span class="o">/</span><span class="w">                        </span><span class="err">#</span><span class="w"> </span><span class="nx">Python</span><span class="w"> </span><span class="p">(</span><span class="nx">FastMCP</span><span class="p">)</span><span class="w"> </span><span class="nx">ou</span><span class="w"> </span><span class="nx">Go</span>
+<span class="err">├──</span><span class="w"> </span><span class="nx">tests</span><span class="o">/</span>
+<span class="err">├──</span><span class="w"> </span><span class="nx">Dockerfile</span>
+<span class="err">├──</span><span class="w"> </span><span class="nx">pyproject</span><span class="p">.</span><span class="nx">toml</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="nx">go</span><span class="p">.</span><span class="nx">mod</span>
+<span class="err">├──</span><span class="w"> </span><span class="p">.</span><span class="nx">github</span><span class="o">/</span><span class="nx">workflows</span><span class="o">/</span><span class="nx">ci</span><span class="p">.</span><span class="nx">yml</span><span class="w">    </span><span class="err">#</span><span class="w"> </span><span class="nx">Build</span><span class="w"> </span><span class="err">→</span><span class="w"> </span><span class="nx">push</span><span class="w"> </span><span class="nx">image</span><span class="w"> </span><span class="err">→</span><span class="w"> </span><span class="nx">push</span><span class="w"> </span><span class="nx">schema</span><span class="w"> </span><span class="nx">to</span><span class="w"> </span><span class="nx">registry</span>
+<span class="err">└──</span><span class="w"> </span><span class="nx">mcp</span><span class="o">-</span><span class="nx">manifest</span><span class="p">.</span><span class="nx">json</span><span class="w">           </span><span class="err">#</span><span class="w"> </span><span class="p">{</span><span class="nx">name</span><span class="p">,</span><span class="w"> </span><span class="nx">version</span><span class="p">,</span><span class="w"> </span><span class="nx">tools</span><span class="p">[],</span><span class="w"> </span><span class="nx">auth</span><span class="p">,</span><span class="w"> </span><span class="nx">transport</span><span class="p">}</span>
+
+<span class="err">#</span><span class="w"> </span><span class="nx">Repo</span><span class="w"> </span><span class="mi">3</span><span class="p">:</span><span class="w"> </span><span class="nx">jira</span><span class="o">-</span><span class="nx">mcp</span><span class="o">-</span><span class="nx">server</span><span class="w"> </span><span class="p">(</span><span class="nx">futuro</span><span class="p">)</span>
+<span class="nx">jira</span><span class="o">-</span><span class="nx">mcp</span><span class="o">-</span><span class="nx">server</span><span class="o">/</span>
+<span class="err">└──</span><span class="w"> </span><span class="o">...</span>
+
+<span class="err">#</span><span class="w"> </span><span class="nx">Registry</span><span class="w"> </span><span class="nx">privado</span><span class="w"> </span><span class="p">(</span><span class="nx">Control</span><span class="w"> </span><span class="nx">Plane</span><span class="p">)</span><span class="w"> </span><span class="nx">armazena</span><span class="p">:</span>
+<span class="err">#</span><span class="w">   </span><span class="o">-</span><span class="w"> </span><span class="nx">Docker</span><span class="w"> </span><span class="nx">image</span><span class="w"> </span><span class="nx">digest</span><span class="w"> </span><span class="p">(</span><span class="nx">sha256</span><span class="p">)</span>
+<span class="err">#</span><span class="w">   </span><span class="o">-</span><span class="w"> </span><span class="nx">mcp</span><span class="o">-</span><span class="nx">manifest</span><span class="p">.</span><span class="nx">json</span><span class="w"> </span><span class="p">(</span><span class="nx">tools</span><span class="p">,</span><span class="w"> </span><span class="nx">inputSchemas</span><span class="p">,</span><span class="w"> </span><span class="nx">auth</span><span class="w"> </span><span class="nx">requirements</span><span class="p">)</span>
+<span class="err">#</span><span class="w">   </span><span class="o">-</span><span class="w"> </span><span class="nx">SBOM</span><span class="p">,</span><span class="w"> </span><span class="nx">scan</span><span class="w"> </span><span class="nx">results</span><span class="p">,</span><span class="w"> </span><span class="nx">cosign</span><span class="w"> </span><span class="nx">signature</span>
+</code></pre></div>
+
+<p><strong>Fluxo de Release MCP Server</strong> (ex: FS v1.3.0):
+1. Dev faz PR no <code>fs-mcp-server</code> → CI roda testes, build image <code>ghcr.io/you/fs-mcp-server:1.3.0</code>, gera <code>mcp-manifest.json</code>, assina com cosign.
+2. CI faz <code>POST /api/v1/registry/servers</code> no Control Plane (auth machine-to-machine) → Registry armazena versão, marca <code>status: staging</code>.
+3. No Admin Console, operador clica <strong>Promover para Produção</strong> → Control Plane atualiza <code>skill_version</code> nas instâncias Obot dos ambientes desejados (canary → full).
+4. Rollback = trocar <code>skill_version</code> anterior.</p>
+<hr />
+<h2 id="9-padroes-de-multi-tenancy-para-freshservice-mcp-atualizado"><a class="toclink" href="#9-padroes-de-multi-tenancy-para-freshservice-mcp-atualizado">9. Padrões de Multi-Tenancy para Freshservice MCP (Atualizado)</a><a class="headerlink" href="#9-padroes-de-multi-tenancy-para-freshservice-mcp-atualizado" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><span class="nf">graph</span><span class="w"> </span><span class="n">LR</span>
+<span class="w">    </span><span class="n">A</span><span class="p">[</span><span class="n">Estratégia</span><span class="w"> </span><span class="n">Multi</span><span class="o">-</span><span class="n">Tenant</span><span class="p">]</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">B</span><span class="p">[</span><span class="kr">Shared</span><span class="w"> </span><span class="n">Gateway</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">Pool</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="n">RLS</span><span class="w"> </span><span class="n">PG</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">Vault</span><span class="w"> </span><span class="n">Paths</span><span class="p">]</span>
+<span class="w">    </span><span class="n">A</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">C</span><span class="p">[</span><span class="n">Gateway</span><span class="w"> </span><span class="n">por</span><span class="w"> </span><span class="n">Tenant</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="p">(</span><span class="n">Namespace</span><span class="w"> </span><span class="n">K8s</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="n">Docker</span><span class="w"> </span><span class="n">Network</span><span class="p">)]</span>
+<span class="w">    </span><span class="n">A</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">D</span><span class="p">[</span><span class="n">Gateway</span><span class="w"> </span><span class="n">Cluster</span><span class="w"> </span><span class="n">Dedicado</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="p">(</span><span class="n">HA</span><span class="p">,</span><span class="w"> </span><span class="n">Recursos</span><span class="w"> </span><span class="n">Garantidos</span><span class="p">)]</span>
+<span class="w">    </span><span class="n">A</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">E</span><span class="p">[</span><span class="n">BYOC</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="n">Gateway</span><span class="w"> </span><span class="n">no</span><span class="w"> </span><span class="n">VPC</span><span class="w"> </span><span class="n">Cliente</span><span class="p">]</span>
+
+<span class="w">    </span><span class="n">B</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">B1</span><span class="p">[</span><span class="n">Baixo</span><span class="w"> </span><span class="n">custo</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="n">Alta</span><span class="w"> </span><span class="n">densidade</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="n">Rate</span><span class="w"> </span><span class="kr">limit</span><span class="w"> </span><span class="n">compartilhado</span><span class="w"> </span><span class="n">FS</span><span class="w"> </span><span class="n">API</span><span class="p">]</span>
+<span class="w">    </span><span class="n">C</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">C1</span><span class="p">[</span><span class="n">Isolamento</span><span class="w"> </span><span class="n">forte</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="n">Rate</span><span class="w"> </span><span class="kr">limit</span><span class="w"> </span><span class="n">dedicado</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="n">Custo</span><span class="w"> </span><span class="n">médio</span><span class="p">]</span>
+<span class="w">    </span><span class="n">D</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">D1</span><span class="p">[</span><span class="n">Isolamento</span><span class="w"> </span><span class="n">total</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="n">SLA</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">throughput</span><span class="w"> </span><span class="n">garantido</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="n">Custo</span><span class="w"> </span><span class="n">alto</span><span class="p">]</span>
+<span class="w">    </span><span class="n">E</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">E1</span><span class="p">[</span><span class="kt">Data</span><span class="w"> </span><span class="n">residency</span><span class="w"> </span><span class="n">total</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="n">Tokens</span><span class="w"> </span><span class="n">FS</span><span class="w"> </span><span class="n">nunca</span><span class="w"> </span><span class="n">saem</span><span class="w"> </span><span class="n">do</span><span class="w"> </span><span class="n">VPC</span><span class="w"> </span><span class="n">cliente</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="n">Suporte</span><span class="w"> </span><span class="n">complexo</span><span class="p">]</span>
+</code></pre></div>
+
+<h3 id="recomendacao-por-tier-freshservice"><a class="toclink" href="#recomendacao-por-tier-freshservice">Recomendação por Tier (Freshservice)</a><a class="headerlink" href="#recomendacao-por-tier-freshservice" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Tier</th>
+<th>Estratégia Gateway</th>
+<th>Freshservice OAuth</th>
+<th>Rate Limit FS API</th>
+<th>SLA</th>
+<th>Preço Base (BRL)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Starter</strong></td>
+<td>Shared Pool + RLS</td>
+<td>Shared Vault + Paths</td>
+<td>Pool compartilhado (100 req/min)</td>
+<td>99.5%</td>
+<td>R$ 299/mês (até 10k tool calls)</td>
+</tr>
+<tr>
+<td><strong>Professional</strong></td>
+<td>Namespace K8s / Docker Network dedicado</td>
+<td>Namespace Vault</td>
+<td>Dedicado (500 req/min)</td>
+<td>99.9%</td>
+<td>R$ 999/mês (até 100k tool calls)</td>
+</tr>
+<tr>
+<td><strong>Enterprise</strong></td>
+<td>Cluster Dedicado HA</td>
+<td>Vault Dedicado + KMS</td>
+<td>Dedicado (2000 req/min)</td>
+<td>99.95%</td>
+<td>R$ 3.999/mês (até 1M tool calls)</td>
+</tr>
+<tr>
+<td><strong>Dedicated/BYOC</strong></td>
+<td>BYOC (Gateway no VPC cliente)</td>
+<td>Customer KMS</td>
+<td>Ilimitado (cliente controla)</td>
+<td>Custom</td>
+<td>Sob consulta</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p><strong>Nota crítica</strong>: Freshservice API tem rate limits por domínio. Tier Starter compartilha o limite; tiers superiores têm pools dedicados ou BYOC.</p>
+</blockquote>
+<hr />
+<h2 id="10-modelo-de-billing-monetizacao-freshservice-mcp"><a class="toclink" href="#10-modelo-de-billing-monetizacao-freshservice-mcp">10. Modelo de Billing &amp; Monetização (Freshservice MCP)</a><a class="headerlink" href="#10-modelo-de-billing-monetizacao-freshservice-mcp" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><span class="n">sequenceDiagram</span>
+<span class="w">    </span><span class="n">participant</span><span class="w"> </span><span class="n">Customer</span>
+<span class="w">    </span><span class="n">participant</span><span class="w"> </span><span class="n">Console</span>
+<span class="w">    </span><span class="n">participant</span><span class="w"> </span><span class="n">API</span>
+<span class="w">    </span><span class="n">participant</span><span class="w"> </span><span class="n">Stripe</span>
+<span class="w">    </span><span class="n">participant</span><span class="w"> </span><span class="n">Metering</span>
+<span class="w">    </span><span class="n">Customer</span><span class="o">-&gt;&gt;</span><span class="n">Console</span><span class="p">:</span><span class="w"> </span><span class="n">Conecta</span><span class="w"> </span><span class="n">domínio</span><span class="w"> </span><span class="n">Freshservice</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="n">escolhe</span><span class="w"> </span><span class="n">plano</span>
+<span class="w">    </span><span class="n">Console</span><span class="o">-&gt;&gt;</span><span class="n">API</span><span class="p">:</span><span class="w"> </span><span class="n">POST</span><span class="w"> </span><span class="o">/</span><span class="n">organizations</span><span class="w"> </span><span class="p">{</span><span class="n">name</span><span class="p">,</span><span class="w"> </span><span class="n">plan</span><span class="p">,</span><span class="w"> </span><span class="n">environments</span><span class="p">:[{</span><span class="n">name</span><span class="p">,</span><span class="n">type</span><span class="p">,</span><span class="n">domain</span><span class="p">,</span><span class="n">oauth</span><span class="p">}]}</span>
+<span class="w">    </span><span class="n">API</span><span class="o">-&gt;&gt;</span><span class="n">Provisioning</span><span class="p">:</span><span class="w"> </span><span class="n">Para</span><span class="w"> </span><span class="n">cada</span><span class="w"> </span><span class="n">env</span><span class="p">:</span><span class="w"> </span><span class="n">provisiona</span><span class="w"> </span><span class="n">gateway</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">FS</span><span class="w"> </span><span class="n">MCP</span><span class="w"> </span><span class="n">Server</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">OAuth</span><span class="w"> </span><span class="n">config</span>
+<span class="w">    </span><span class="n">API</span><span class="o">-&gt;&gt;</span><span class="n">Stripe</span><span class="p">:</span><span class="w"> </span><span class="n">Create</span><span class="w"> </span><span class="n">subscription</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">meter</span><span class="w"> </span><span class="p">(</span><span class="n">tool_calls</span><span class="p">)</span><span class="w"> </span><span class="n">por</span><span class="w"> </span><span class="n">env</span>
+<span class="w">    </span><span class="n">Provisioning</span><span class="o">--&gt;&gt;</span><span class="n">API</span><span class="p">:</span><span class="w"> </span><span class="n">env_id</span><span class="p">,</span><span class="w"> </span><span class="n">gateway_url</span><span class="p">,</span><span class="w"> </span><span class="n">client_credentials</span>
+<span class="w">    </span><span class="n">API</span><span class="o">--&gt;&gt;</span><span class="n">Console</span><span class="p">:</span><span class="w"> </span><span class="n">Org</span><span class="w"> </span><span class="n">pronta</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">credenciais</span><span class="w"> </span><span class="n">MCP</span><span class="w"> </span><span class="n">por</span><span class="w"> </span><span class="n">ambiente</span>
+<span class="w">    </span><span class="n">loop</span><span class="w"> </span><span class="n">Contínuo</span>
+<span class="w">        </span><span class="n">Metering</span><span class="o">-&gt;&gt;</span><span class="n">Stripe</span><span class="p">:</span><span class="w"> </span><span class="n">Report</span><span class="w"> </span><span class="n">tool_calls</span><span class="w"> </span><span class="n">por</span><span class="w"> </span><span class="k">tool</span><span class="w"> </span><span class="p">(</span><span class="n">ticket</span><span class="o">.</span><span class="n">create</span><span class="p">,</span><span class="w"> </span><span class="n">workflow</span><span class="o">.</span><span class="n">trigger</span><span class="o">...</span><span class="p">)</span>
+<span class="w">        </span><span class="n">Stripe</span><span class="o">-&gt;&gt;</span><span class="n">Customer</span><span class="p">:</span><span class="w"> </span><span class="n">Invoice</span><span class="w"> </span><span class="p">(</span><span class="n">base</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">overage</span><span class="w"> </span><span class="n">por</span><span class="w"> </span><span class="k">tool</span><span class="o">/</span><span class="n">ambiente</span><span class="p">)</span>
+<span class="w">    </span><span class="n">end</span>
+</code></pre></div>
+
+<h3 id="tabela-de-precos-exemplo-brl-freshservice"><a class="toclink" href="#tabela-de-precos-exemplo-brl-freshservice">Tabela de Preços (Exemplo BRL - Freshservice)</a><a class="headerlink" href="#tabela-de-precos-exemplo-brl-freshservice" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Componente</th>
+<th>Starter</th>
+<th>Professional</th>
+<th>Enterprise</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Base/mês</strong></td>
+<td>R$ 299</td>
+<td>R$ 999</td>
+<td>R$ 3.999</td>
+</tr>
+<tr>
+<td><strong>Tool calls incluídos</strong></td>
+<td>10.000</td>
+<td>100.000</td>
+<td>1.000.000</td>
+</tr>
+<tr>
+<td><strong>Tool call extra</strong></td>
+<td>R$ 0,020/call</td>
+<td>R$ 0,012/call</td>
+<td>R$ 0,007/call</td>
+</tr>
+<tr>
+<td><strong>Ambientes (sandbox+prod)</strong></td>
+<td>2</td>
+<td>5</td>
+<td>10</td>
+</tr>
+<tr>
+<td><strong>Concurrent connections</strong></td>
+<td>5</td>
+<td>25</td>
+<td>100</td>
+</tr>
+<tr>
+<td><strong>Custom tools (além do core FS)</strong></td>
+<td>—</td>
+<td>5</td>
+<td>Ilimitado</td>
+</tr>
+<tr>
+<td><strong>Connectors Premium (Jira, ADO, Slack)</strong></td>
+<td>—</td>
+<td>R$ 199/mês cada</td>
+<td>Incluído (até 5)</td>
+</tr>
+<tr>
+<td><strong>SIEM Streaming</strong></td>
+<td>—</td>
+<td>R$ 299/mês</td>
+<td>Incluído</td>
+</tr>
+<tr>
+<td><strong>Custom Domain + SSL</strong></td>
+<td>R$ 49/mês</td>
+<td>Incluído</td>
+<td>Incluído</td>
+</tr>
+<tr>
+<td><strong>SSO/SAML/SCIM</strong></td>
+<td>—</td>
+<td>R$ 299/mês</td>
+<td>Incluído</td>
+</tr>
+<tr>
+<td><strong>SLA</strong></td>
+<td>99.5%</td>
+<td>99.9%</td>
+<td>99.95%</td>
+</tr>
+</tbody>
+</table>
+<h3 id="metricas-de-uso-metering-events-freshservice"><a class="toclink" href="#metricas-de-uso-metering-events-freshservice">Métricas de Uso (Metering Events - Freshservice)</a><a class="headerlink" href="#metricas-de-uso-metering-events-freshservice" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Evento</th>
+<th>Propriedades</th>
+<th>Frequência</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>tool.call</code></td>
+<td>org_id, env_id, server_id, tool_name (ticket.create, workflow.trigger...), args_hash, latency_ms, status, fs_domain</td>
+<td>Por invocação</td>
+</tr>
+<tr>
+<td><code>tool.call.batch</code></td>
+<td>org_id, env_id, server_id, count, total_latency_ms</td>
+<td>Agregado/minuto</td>
+</tr>
+<tr>
+<td><code>freshservice.oauth_refresh</code></td>
+<td>org_id, env_id, user_id, domain, success</td>
+<td>Por refresh</td>
+</tr>
+<tr>
+<td><code>freshservice.rate_limit_hit</code></td>
+<td>org_id, env_id, endpoint, retry_after_ms</td>
+<td>Por evento 429</td>
+</tr>
+<tr>
+<td><code>env.provisioned</code></td>
+<td>org_id, env_id, template (freshservice-core), domain</td>
+<td>Por provisionamento</td>
+</tr>
+<tr>
+<td><code>audit.export</code></td>
+<td>org_id, format, size_bytes</td>
+<td>Por exportação</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="11-autenticacao-sso-tokens-oauth-21-pkce-freshservice"><a class="toclink" href="#11-autenticacao-sso-tokens-oauth-21-pkce-freshservice">11. Autenticação, SSO &amp; Tokens — OAuth 2.1 + PKCE (Freshservice)</a><a class="headerlink" href="#11-autenticacao-sso-tokens-oauth-21-pkce-freshservice" title="Permanent link">&para;</a></h2>
+<h3 id="arquitetura-de-auth-freshservice-mcp"><a class="toclink" href="#arquitetura-de-auth-freshservice-mcp">Arquitetura de Auth (Freshservice MCP)</a><a class="headerlink" href="#arquitetura-de-auth-freshservice-mcp" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><span class="n">MCP</span><span class="w"> </span><span class="n">CLIENT</span><span class="w"> </span><span class="p">(</span><span class="n">Host</span><span class="w"> </span><span class="n">App</span><span class="p">)</span>
+<span class="n">Claude</span><span class="w"> </span><span class="n">Desktop</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="n">Cursor</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="n">Custom</span><span class="w"> </span><span class="n">Agent</span>
+<span class="w">         </span><span class="err">│</span>
+<span class="w">         </span><span class="err">│</span><span class="w"> </span><span class="n">Streamable</span><span class="w"> </span><span class="n">HTTP</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">Bearer</span><span class="w"> </span><span class="n">Token</span>
+<span class="w">         </span><span class="err">▼</span>
+<span class="n">MCP</span><span class="w"> </span><span class="n">GATEWAY</span><span class="w"> </span><span class="p">(</span><span class="n">Obot</span><span class="p">)</span>
+<span class="err">•</span><span class="w"> </span><span class="n">Valida</span><span class="w"> </span><span class="n">JWT</span><span class="w"> </span><span class="p">(</span><span class="n">JWKS</span><span class="w"> </span><span class="n">cache</span><span class="w"> </span><span class="mi">5</span><span class="nb">min</span><span class="p">)</span>
+<span class="err">•</span><span class="w"> </span><span class="n">Resolve</span><span class="w"> </span><span class="n">org_id</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">env_id</span>
+<span class="err">•</span><span class="w"> </span><span class="n">Busca</span><span class="w"> </span><span class="n">Freshservice</span><span class="w"> </span><span class="n">OAuth</span><span class="w"> </span><span class="n">tokens</span><span class="w"> </span><span class="n">no</span><span class="w"> </span><span class="n">Vault</span><span class="w"> </span><span class="p">(</span><span class="n">path</span><span class="w"> </span><span class="n">por</span><span class="w"> </span><span class="n">env</span><span class="p">)</span>
+<span class="err">•</span><span class="w"> </span><span class="n">Injeta</span><span class="w"> </span><span class="n">Authorization</span><span class="p">:</span><span class="w"> </span><span class="n">Bearer</span><span class="w"> </span><span class="o">&lt;</span><span class="n">fs_access_token</span><span class="o">&gt;</span>
+<span class="err">•</span><span class="w"> </span><span class="n">Rate</span><span class="w"> </span><span class="n">limit</span><span class="w"> </span><span class="n">por</span><span class="w"> </span><span class="n">org</span><span class="o">/</span><span class="n">env</span><span class="o">/</span><span class="k">tool</span>
+<span class="w">         </span><span class="err">│</span>
+<span class="w">         </span><span class="err">│</span><span class="w"> </span><span class="n">Freshservice</span><span class="w"> </span><span class="n">API</span><span class="w"> </span><span class="n">calls</span>
+<span class="w">         </span><span class="err">▼</span>
+<span class="n">FRESHSERVICE</span><span class="w"> </span><span class="n">MCP</span><span class="w"> </span><span class="n">SERVER</span><span class="w"> </span><span class="p">(</span><span class="n">Nosso</span><span class="w"> </span><span class="n">Código</span><span class="p">)</span>
+<span class="err">•</span><span class="w"> </span><span class="n">Implementa</span><span class="w"> </span><span class="n">tools</span><span class="p">:</span><span class="w"> </span><span class="n">ticket</span><span class="o">.*</span><span class="p">,</span><span class="w"> </span><span class="n">asset</span><span class="o">.*</span><span class="p">,</span><span class="w"> </span><span class="n">catalog</span><span class="o">.*</span><span class="p">,</span><span class="w"> </span><span class="n">change</span><span class="o">.*</span><span class="p">,</span><span class="w"> </span><span class="n">workflow</span><span class="o">.*</span>
+<span class="err">•</span><span class="w"> </span><span class="n">Chama</span><span class="w"> </span><span class="n">Freshservice</span><span class="w"> </span><span class="n">REST</span><span class="w"> </span><span class="n">API</span><span class="w"> </span><span class="n">v2</span>
+<span class="err">•</span><span class="w"> </span><span class="n">Trata</span><span class="w"> </span><span class="n">paginação</span><span class="p">,</span><span class="w"> </span><span class="n">erros</span><span class="p">,</span><span class="w"> </span><span class="n">retry</span><span class="p">,</span><span class="w"> </span><span class="n">webhook</span><span class="w"> </span><span class="n">events</span>
+<span class="w">         </span><span class="err">│</span>
+<span class="w">         </span><span class="err">│</span><span class="w"> </span><span class="n">OAuth</span><span class="w"> </span><span class="mf">2.0</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="n">API</span><span class="w"> </span><span class="n">Key</span>
+<span class="w">         </span><span class="err">▼</span>
+<span class="n">FRESHSERVICE</span><span class="w"> </span><span class="p">(</span><span class="n">SaaS</span><span class="p">)</span>
+<span class="n">Domínio</span><span class="w"> </span><span class="n">do</span><span class="w"> </span><span class="n">tenant</span><span class="p">:</span><span class="w"> </span><span class="n">empresa</span><span class="o">.</span><span class="n">freshservice</span><span class="o">.</span><span class="n">com</span>
+<span class="n">OAuth</span><span class="w"> </span><span class="n">App</span><span class="w"> </span><span class="n">configurado</span><span class="w"> </span><span class="n">no</span><span class="w"> </span><span class="n">Admin</span><span class="w"> </span><span class="n">Console</span><span class="w"> </span><span class="n">Freshservice</span>
+</code></pre></div>
+
+<h3 id="fluxo-oauth-21-pkce-freshservice-integration-por-ambiente"><a class="toclink" href="#fluxo-oauth-21-pkce-freshservice-integration-por-ambiente">Fluxo OAuth 2.1 + PKCE — Freshservice Integration (por Ambiente)</a><a class="headerlink" href="#fluxo-oauth-21-pkce-freshservice-integration-por-ambiente" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><span class="n">sequenceDiagram</span>
+<span class="w">    </span><span class="n">autonumber</span>
+<span class="w">    </span><span class="n">actor</span><span class="w"> </span><span class="n">Admin</span>
+<span class="w">    </span><span class="n">participant</span><span class="w"> </span><span class="n">Console</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">Admin</span><span class="w"> </span><span class="n">Console</span>
+<span class="w">    </span><span class="n">participant</span><span class="w"> </span><span class="n">GW</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">MCP</span><span class="w"> </span><span class="n">Gateway</span><span class="w"> </span><span class="p">(</span><span class="n">Obot</span><span class="p">)</span>
+<span class="w">    </span><span class="n">participant</span><span class="w"> </span><span class="n">Vault</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">Token</span><span class="w"> </span><span class="n">Vault</span>
+<span class="w">    </span><span class="n">participant</span><span class="w"> </span><span class="n">FS</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">Freshservice</span><span class="w"> </span><span class="p">(</span><span class="n">OAuth</span><span class="w"> </span><span class="n">Server</span><span class="p">)</span>
+
+<span class="w">    </span><span class="n">Admin</span><span class="o">-&gt;&gt;</span><span class="n">Console</span><span class="p">:</span><span class="w"> </span><span class="n">Cadastra</span><span class="w"> </span><span class="n">domínio</span><span class="w"> </span><span class="n">Freshservice</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">OAuth</span><span class="w"> </span><span class="n">App</span><span class="w"> </span><span class="n">credentials</span><span class="w"> </span><span class="p">(</span><span class="n">para</span><span class="w"> </span><span class="n">sandbox</span><span class="w"> </span><span class="n">OU</span><span class="w"> </span><span class="n">prod</span><span class="p">)</span>
+<span class="w">    </span><span class="n">Console</span><span class="o">-&gt;&gt;</span><span class="n">GW</span><span class="p">:</span><span class="w"> </span><span class="n">POST</span><span class="w"> </span><span class="o">/</span><span class="n">organizations</span><span class="o">/</span><span class="p">{</span><span class="n">org_id</span><span class="p">}</span><span class="o">/</span><span class="n">environments</span><span class="o">/</span><span class="p">{</span><span class="n">env_id</span><span class="p">}</span><span class="o">/</span><span class="n">freshservice</span><span class="o">/</span><span class="n">config</span><span class="w"> </span><span class="p">{</span><span class="n">domain</span><span class="p">,</span><span class="w"> </span><span class="n">client_id</span><span class="p">,</span><span class="w"> </span><span class="n">client_secret</span><span class="p">}</span>
+<span class="w">    </span><span class="n">GW</span><span class="o">-&gt;&gt;</span><span class="n">Vault</span><span class="p">:</span><span class="w"> </span><span class="n">Armazena</span><span class="w"> </span><span class="n">client_secret</span><span class="w"> </span><span class="n">criptografado</span><span class="w"> </span><span class="n">em</span><span class="w"> </span><span class="n">secret</span><span class="o">/</span><span class="n">org</span><span class="o">/</span><span class="p">{</span><span class="n">org_id</span><span class="p">}</span><span class="o">/</span><span class="p">{</span><span class="n">env_id</span><span class="p">}</span><span class="o">/</span><span class="n">fs</span><span class="o">-</span><span class="n">oauth</span>
+<span class="w">    </span><span class="n">GW</span><span class="o">-&gt;&gt;</span><span class="n">FS</span><span class="p">:</span><span class="w"> </span><span class="n">Valida</span><span class="w"> </span><span class="n">credenciais</span><span class="w"> </span><span class="p">(</span><span class="n">GET</span><span class="w"> </span><span class="o">/</span><span class="n">api</span><span class="o">/</span><span class="n">v2</span><span class="o">/</span><span class="n">tickets</span><span class="err">?</span><span class="n">per_page</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+<span class="w">    </span><span class="n">FS</span><span class="o">--&gt;&gt;</span><span class="n">GW</span><span class="p">:</span><span class="w"> </span><span class="mi">200</span><span class="w"> </span><span class="n">OK</span>
+<span class="w">    </span><span class="n">GW</span><span class="o">--&gt;&gt;</span><span class="n">Console</span><span class="p">:</span><span class="w"> </span><span class="n">Configuração</span><span class="w"> </span><span class="n">validada</span>
+
+<span class="w">    </span><span class="n">actor</span><span class="w"> </span><span class="n">User</span>
+<span class="w">    </span><span class="n">participant</span><span class="w"> </span><span class="n">App</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">MCP</span><span class="w"> </span><span class="n">Host</span><span class="w"> </span><span class="n">App</span>
+<span class="w">    </span><span class="n">participant</span><span class="w"> </span><span class="n">Browser</span>
+<span class="w">    </span><span class="n">participant</span><span class="w"> </span><span class="n">AS</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">Freshservice</span><span class="w"> </span><span class="n">OAuth</span><span class="w"> </span><span class="p">(</span><span class="n">Authorization</span><span class="w"> </span><span class="n">Server</span><span class="p">)</span>
+
+<span class="w">    </span><span class="n">User</span><span class="o">-&gt;&gt;</span><span class="n">App</span><span class="p">:</span><span class="w"> </span><span class="n">Inicia</span><span class="w"> </span><span class="n">agente</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="n">acessa</span><span class="w"> </span><span class="n">recurso</span><span class="w"> </span><span class="p">(</span><span class="n">header</span><span class="w"> </span><span class="n">X</span><span class="o">-</span><span class="n">Environment</span><span class="o">-</span><span class="n">ID</span><span class="p">:</span><span class="w"> </span><span class="n">sandbox</span><span class="p">)</span>
+<span class="w">    </span><span class="n">App</span><span class="o">-&gt;&gt;</span><span class="n">Browser</span><span class="p">:</span><span class="w"> </span><span class="n">Redirect</span><span class="w"> </span><span class="err">→</span><span class="w"> </span><span class="n">GW</span><span class="w"> </span><span class="o">/</span><span class="n">authorize</span><span class="err">?</span><span class="n">client_id</span><span class="o">&amp;</span><span class="n">redirect_uri</span><span class="o">&amp;</span><span class="n">scope</span><span class="o">&amp;</span><span class="n">code_challenge</span><span class="o">&amp;</span><span class="n">env</span><span class="o">=</span><span class="n">sandbox</span>
+<span class="w">    </span><span class="n">Browser</span><span class="o">-&gt;&gt;</span><span class="n">GW</span><span class="p">:</span><span class="w"> </span><span class="n">GET</span><span class="w"> </span><span class="o">/</span><span class="n">authorize</span><span class="w"> </span><span class="p">(</span><span class="n">valida</span><span class="w"> </span><span class="n">PKCE</span><span class="p">,</span><span class="w"> </span><span class="n">org</span><span class="o">+</span><span class="n">env</span><span class="w"> </span><span class="n">context</span><span class="p">)</span>
+<span class="w">    </span><span class="n">GW</span><span class="o">-&gt;&gt;</span><span class="n">AS</span><span class="p">:</span><span class="w"> </span><span class="n">Redirect</span><span class="w"> </span><span class="o">/</span><span class="n">oauth</span><span class="o">/</span><span class="n">authorize</span><span class="w"> </span><span class="p">(</span><span class="n">Freshservice</span><span class="w"> </span><span class="n">OAuth</span><span class="p">)</span>
+<span class="w">    </span><span class="n">AS</span><span class="o">-&gt;&gt;</span><span class="n">Browser</span><span class="p">:</span><span class="w"> </span><span class="n">Login</span><span class="w"> </span><span class="n">Freshservice</span><span class="w"> </span><span class="p">(</span><span class="n">SSO</span><span class="o">/</span><span class="n">SAML</span><span class="o">/</span><span class="n">Google</span><span class="o">/</span><span class="n">Microsoft</span><span class="p">)</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">Consent</span>
+<span class="w">    </span><span class="n">Browser</span><span class="o">-&gt;&gt;</span><span class="n">AS</span><span class="p">:</span><span class="w"> </span><span class="n">Credenciais</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="n">MFA</span>
+<span class="w">    </span><span class="n">AS</span><span class="o">-&gt;&gt;</span><span class="n">Browser</span><span class="p">:</span><span class="w"> </span><span class="n">Redirect</span><span class="w"> </span><span class="err">→</span><span class="w"> </span><span class="n">GW</span><span class="w"> </span><span class="o">/</span><span class="n">callback</span><span class="err">?</span><span class="n">code</span><span class="o">=...</span>
+<span class="w">    </span><span class="n">GW</span><span class="o">-&gt;&gt;</span><span class="n">AS</span><span class="p">:</span><span class="w"> </span><span class="n">POST</span><span class="w"> </span><span class="o">/</span><span class="n">oauth</span><span class="o">/</span><span class="n">token</span><span class="w"> </span><span class="p">(</span><span class="n">code</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">code_verifier</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">client_secret</span><span class="p">)</span>
+<span class="w">    </span><span class="n">AS</span><span class="o">-&gt;&gt;</span><span class="n">GW</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="n">access_token</span><span class="p">,</span><span class="w"> </span><span class="n">refresh_token</span><span class="p">,</span><span class="w"> </span><span class="n">expires_in</span><span class="p">,</span><span class="w"> </span><span class="n">scope</span><span class="p">}</span>
+<span class="w">    </span><span class="n">GW</span><span class="o">-&gt;&gt;</span><span class="n">Vault</span><span class="p">:</span><span class="w"> </span><span class="n">Armazena</span><span class="w"> </span><span class="n">refresh_token</span><span class="w"> </span><span class="n">criptografado</span><span class="w"> </span><span class="p">(</span><span class="n">per</span><span class="o">-</span><span class="n">org</span><span class="o">/</span><span class="n">env</span><span class="o">/</span><span class="n">user</span><span class="p">)</span>
+<span class="w">    </span><span class="n">GW</span><span class="o">-&gt;&gt;</span><span class="n">Browser</span><span class="p">:</span><span class="w"> </span><span class="n">Redirect</span><span class="w"> </span><span class="err">→</span><span class="w"> </span><span class="n">App</span><span class="w"> </span><span class="o">/</span><span class="n">callback</span><span class="err">?</span><span class="n">code</span><span class="o">=...</span>
+<span class="w">    </span><span class="n">Browser</span><span class="o">-&gt;&gt;</span><span class="n">App</span><span class="p">:</span><span class="w"> </span><span class="n">GET</span><span class="w"> </span><span class="o">/</span><span class="n">callback</span><span class="err">?</span><span class="n">code</span><span class="o">=...</span>
+<span class="w">    </span><span class="n">App</span><span class="o">-&gt;&gt;</span><span class="n">GW</span><span class="p">:</span><span class="w"> </span><span class="n">POST</span><span class="w"> </span><span class="o">/</span><span class="n">token</span><span class="w"> </span><span class="p">(</span><span class="n">code</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">code_verifier</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">client_secret</span><span class="p">)</span>
+<span class="w">    </span><span class="n">GW</span><span class="o">-&gt;&gt;</span><span class="n">App</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="n">access_token</span><span class="p">,</span><span class="w"> </span><span class="n">refresh_token</span><span class="p">,</span><span class="w"> </span><span class="n">expires_in</span><span class="p">}</span>
+
+<span class="w">    </span><span class="n">loop</span><span class="w"> </span><span class="n">Tool</span><span class="w"> </span><span class="n">Calls</span><span class="w"> </span><span class="p">(</span><span class="n">ex</span><span class="p">:</span><span class="w"> </span><span class="n">workflow</span><span class="o">.</span><span class="n">trigger</span><span class="p">)</span>
+<span class="w">        </span><span class="n">App</span><span class="o">-&gt;&gt;</span><span class="n">GW</span><span class="p">:</span><span class="w"> </span><span class="n">MCP</span><span class="w"> </span><span class="n">tools</span><span class="o">/</span><span class="n">call</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">Bearer</span><span class="w"> </span><span class="n">token</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">X</span><span class="o">-</span><span class="n">Environment</span><span class="o">-</span><span class="n">ID</span>
+<span class="w">        </span><span class="n">GW</span><span class="o">-&gt;&gt;</span><span class="n">GW</span><span class="p">:</span><span class="w"> </span><span class="n">Valida</span><span class="w"> </span><span class="n">JWT</span><span class="p">,</span><span class="w"> </span><span class="n">resolve</span><span class="w"> </span><span class="n">org</span><span class="o">+</span><span class="n">env</span>
+<span class="w">        </span><span class="n">GW</span><span class="o">-&gt;&gt;</span><span class="n">Vault</span><span class="p">:</span><span class="w"> </span><span class="n">Busca</span><span class="w"> </span><span class="n">refresh_token</span><span class="w"> </span><span class="n">Freshservice</span><span class="w"> </span><span class="n">do</span><span class="w"> </span><span class="n">path</span><span class="w"> </span><span class="n">do</span><span class="w"> </span><span class="n">env</span>
+<span class="w">        </span><span class="n">GW</span><span class="o">-&gt;&gt;</span><span class="n">FS</span><span class="p">:</span><span class="w"> </span><span class="n">POST</span><span class="w"> </span><span class="o">/</span><span class="n">oauth</span><span class="o">/</span><span class="n">token</span><span class="w"> </span><span class="p">(</span><span class="n">refresh_token</span><span class="p">)</span><span class="w"> </span><span class="err">→</span><span class="w"> </span><span class="n">novo</span><span class="w"> </span><span class="n">access_token</span>
+<span class="w">        </span><span class="n">GW</span><span class="o">-&gt;&gt;</span><span class="n">FS</span><span class="p">:</span><span class="w"> </span><span class="n">POST</span><span class="w"> </span><span class="o">/</span><span class="n">api</span><span class="o">/</span><span class="n">v2</span><span class="o">/</span><span class="n">workflows</span><span class="o">/</span><span class="mi">123</span><span class="o">/</span><span class="n">trigger</span><span class="w"> </span><span class="p">(</span><span class="n">com</span><span class="w"> </span><span class="n">access_token</span><span class="w"> </span><span class="n">FS</span><span class="p">)</span>
+<span class="w">        </span><span class="n">FS</span><span class="o">--&gt;&gt;</span><span class="n">GW</span><span class="p">:</span><span class="w"> </span><span class="n">Execution</span><span class="w"> </span><span class="n">ID</span>
+<span class="w">        </span><span class="n">GW</span><span class="o">--&gt;&gt;</span><span class="n">App</span><span class="p">:</span><span class="w"> </span><span class="n">Resultado</span><span class="w"> </span><span class="n">MCP</span><span class="w"> </span><span class="n">estruturado</span>
+<span class="w">    </span><span class="n">end</span>
+</code></pre></div>
+
+<h3 id="estrutura-de-tokens-jwt-access-token-exemplo"><a class="toclink" href="#estrutura-de-tokens-jwt-access-token-exemplo">Estrutura de Tokens (JWT) — Access Token Exemplo</a><a class="headerlink" href="#estrutura-de-tokens-jwt-access-token-exemplo" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">"header"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">"alg"</span><span class="p">:</span><span class="w"> </span><span class="s2">"RS256"</span><span class="p">,</span><span class="w"> </span><span class="nt">"typ"</span><span class="p">:</span><span class="w"> </span><span class="s2">"JWT"</span><span class="p">,</span><span class="w"> </span><span class="nt">"kid"</span><span class="p">:</span><span class="w"> </span><span class="s2">"gw-key-2024"</span><span class="w"> </span><span class="p">},</span>
+<span class="w">  </span><span class="nt">"payload"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">"iss"</span><span class="p">:</span><span class="w"> </span><span class="s2">"https://auth.mcp.example/realms/org-acme"</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"sub"</span><span class="p">:</span><span class="w"> </span><span class="s2">"u_abc123"</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"aud"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">"mcp-gateway.example"</span><span class="p">,</span><span class="w"> </span><span class="s2">"client_abc"</span><span class="p">],</span>
+<span class="w">    </span><span class="nt">"azp"</span><span class="p">:</span><span class="w"> </span><span class="s2">"client_abc"</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"sid"</span><span class="p">:</span><span class="w"> </span><span class="s2">"sess_xyz789"</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"org_id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"org_acme"</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"env_id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"sandbox"</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"freshservice_domain"</span><span class="p">:</span><span class="w"> </span><span class="s2">"acme-sandbox.freshservice.com"</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"roles"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">"admin"</span><span class="p">,</span><span class="w"> </span><span class="s2">"mcp_operator"</span><span class="p">,</span><span class="w"> </span><span class="s2">"fs_agent"</span><span class="p">],</span>
+<span class="w">    </span><span class="nt">"permissions"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">"tools:call"</span><span class="p">,</span><span class="w"> </span><span class="s2">"servers:read"</span><span class="p">,</span><span class="w"> </span><span class="s2">"freshservice:tickets:write"</span><span class="p">,</span><span class="w"> </span><span class="s2">"freshservice:workflows:execute"</span><span class="p">],</span>
+<span class="w">    </span><span class="nt">"scope"</span><span class="p">:</span><span class="w"> </span><span class="s2">"openid profile email mcp:tools mcp:servers freshservice:api"</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"auth_time"</span><span class="p">:</span><span class="w"> </span><span class="mi">1729872000</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"acr"</span><span class="p">:</span><span class="w"> </span><span class="s2">"mfa"</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"amr"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">"pwd"</span><span class="p">,</span><span class="w"> </span><span class="s2">"totp"</span><span class="p">],</span>
+<span class="w">    </span><span class="nt">"exp"</span><span class="p">:</span><span class="w"> </span><span class="mi">1729875600</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"iat"</span><span class="p">:</span><span class="w"> </span><span class="mi">1729872000</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"jti"</span><span class="p">:</span><span class="w"> </span><span class="s2">"tok_abcdef123456"</span>
+<span class="w">  </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<h3 id="rotacao-revogacao-freshservice-oauth"><a class="toclink" href="#rotacao-revogacao-freshservice-oauth">Rotação &amp; Revogação (Freshservice OAuth)</a><a class="headerlink" href="#rotacao-revogacao-freshservice-oauth" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Token</th>
+<th>TTL Padrão</th>
+<th>Renovação</th>
+<th>Revogação</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>MCP Access Token</strong></td>
+<td>15 min</td>
+<td>Refresh token</td>
+<td>Introspection / JWKS cache (5 min)</td>
+</tr>
+<tr>
+<td><strong>MCP Refresh Token</strong></td>
+<td>30 dias (rotativo)</td>
+<td>Rotation a cada uso + reuse detection</td>
+<td>Revogação imediata (logout global, admin, segurança)</td>
+</tr>
+<tr>
+<td><strong>Freshservice Access Token</strong></td>
+<td>1h (padrão FS)</td>
+<td>Proativo (background job 10min antes expiry)</td>
+<td>Revogação no Freshservice + purge no Vault</td>
+</tr>
+<tr>
+<td><strong>Freshservice Refresh Token</strong></td>
+<td>Não expira (até revogar)</td>
+<td>N/A</td>
+<td><code>DELETE /organizations/{org_id}/environments/{env_id}/freshservice/tokens</code> + revoke no FS</td>
+</tr>
+<tr>
+<td><strong>Session (server-side)</strong></td>
+<td>30 dias idle</td>
+<td>Sliding window</td>
+<td><code>POST /admin/organizations/{org_id}/sessions/revoke</code></td>
+</tr>
+</tbody>
+</table>
+<h3 id="multi-tenant-auth-patterns-freshservice-context"><a class="toclink" href="#multi-tenant-auth-patterns-freshservice-context">Multi-Tenant Auth Patterns (Freshservice Context)</a><a class="headerlink" href="#multi-tenant-auth-patterns-freshservice-context" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Pattern</th>
+<th>Descrição</th>
+<th>Caso de Uso Freshservice</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Per-User OAuth</strong></td>
+<td>Cada usuário autoriza suas credenciais Freshservice. Tokens criptografados no Vault per-org/env.</td>
+<td>Agentes de suporte usando IA para criar/atualizar tickets <strong>em seu nome</strong>.</td>
+</tr>
+<tr>
+<td><strong>Shared Service Account</strong></td>
+<td>Admin cadastra 1 service account (API Key ou OAuth client credentials). Gateway controla RBAC.</td>
+<td>Automações backend, relatórios, sync de CMDB — <strong>sem usuário humano</strong>.</td>
+</tr>
+<tr>
+<td><strong>Hybrid</strong></td>
+<td>Mix: per-user para tickets (auditoria), shared para assets/CMDB/workflows (operações).</td>
+<td><strong>Maioria dos casos enterprise ITSM</strong>.</td>
+</tr>
+<tr>
+<td><strong>On-Behalf-Of (OBO)</strong></td>
+<td>Gateway troca token do usuário por token Freshservice via Token Exchange (RFC 8693).</td>
+<td>Zero-trust, auditoria completa: "Usuário X disparou workflow via IA às 14:32".</td>
+</tr>
+<tr>
+<td><strong>Virtual MCP Bundles</strong></td>
+<td>Agrupa tools Freshservice + conectores (Jira, Slack) sob 1 endpoint + policy única.</td>
+<td>Cliente vê 1 servidor MCP "ITSM Unificado".</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="12-isolamento-de-dados-seguranca-freshservice-focus"><a class="toclink" href="#12-isolamento-de-dados-seguranca-freshservice-focus">12. Isolamento de Dados &amp; Segurança (Freshservice Focus)</a><a class="headerlink" href="#12-isolamento-de-dados-seguranca-freshservice-focus" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><span class="n">flowchart</span><span class="w"> </span><span class="n">TB</span>
+<span class="w">    </span><span class="n">subgraph</span><span class="w"> </span><span class="n">Network</span><span class="p">[</span><span class="s2">"Network"</span><span class="p">]</span>
+<span class="w">        </span><span class="n">FW</span><span class="p">[</span><span class="n">WAF</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="n">Cloudflare</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="n">AWS</span><span class="w"> </span><span class="n">Shield</span><span class="p">]</span>
+<span class="w">        </span><span class="n">VPC</span><span class="p">[</span><span class="n">VPC</span><span class="w"> </span><span class="n">Dedicado</span><span class="w"> </span><span class="n">por</span><span class="w"> </span><span class="n">Tier</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="n">Enterprise</span><span class="o">+</span><span class="p">]</span>
+<span class="w">        </span><span class="n">SG</span><span class="p">[</span><span class="n">Security</span><span class="w"> </span><span class="n">Groups</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="n">Deny</span><span class="o">-</span><span class="n">by</span><span class="o">-</span><span class="n">default</span><span class="p">]</span>
+<span class="w">        </span><span class="n">MTLS</span><span class="p">[</span><span class="n">mTLS</span><span class="w"> </span><span class="n">CP</span><span class="w"> </span><span class="err">↔</span><span class="w"> </span><span class="n">DP</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="n">SPIFFE</span><span class="o">/</span><span class="n">SPIRE</span><span class="p">]</span>
+<span class="w">    </span><span class="n">end</span>
+
+<span class="w">    </span><span class="n">subgraph</span><span class="w"> </span><span class="n">Data</span><span class="p">[</span><span class="s2">"Data"</span><span class="p">]</span>
+<span class="w">        </span><span class="n">RLS</span><span class="p">[</span><span class="n">Row</span><span class="w"> </span><span class="n">Level</span><span class="w"> </span><span class="n">Security</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="n">PostgreSQL</span><span class="w"> </span><span class="n">policies</span><span class="w"> </span><span class="n">por</span><span class="w"> </span><span class="n">org_id</span><span class="o">+</span><span class="n">env_id</span><span class="p">]</span>
+<span class="w">        </span><span class="n">FS_TOK</span><span class="p">[</span><span class="n">Freshservice</span><span class="w"> </span><span class="n">Tokens</span><span class="w"> </span><span class="n">Isolation</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="n">Vault</span><span class="w"> </span><span class="n">Namespace</span><span class="o">/</span><span class="n">Path</span><span class="w"> </span><span class="n">per</span><span class="w"> </span><span class="n">org</span><span class="o">/</span><span class="n">env</span><span class="p">]</span>
+<span class="w">        </span><span class="n">ENC</span><span class="p">[</span><span class="n">Encryption</span><span class="w"> </span><span class="n">at</span><span class="w"> </span><span class="n">Rest</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="n">AES</span><span class="o">-</span><span class="mi">256</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">KMS</span><span class="w"> </span><span class="p">(</span><span class="n">BYOK</span><span class="w"> </span><span class="n">opcional</span><span class="p">)]</span>
+<span class="w">        </span><span class="n">TLS</span><span class="p">[</span><span class="n">TLS</span><span class="w"> </span><span class="mf">1.3</span><span class="w"> </span><span class="n">everywhere</span><span class="p">]</span>
+<span class="w">        </span><span class="n">BKP</span><span class="p">[</span><span class="n">Backups</span><span class="w"> </span><span class="n">criptografados</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="n">RPO</span><span class="w"> </span><span class="mi">1</span><span class="n">h</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="n">RTO</span><span class="w"> </span><span class="mi">4</span><span class="n">h</span><span class="p">]</span>
+<span class="w">        </span><span class="n">MASK</span><span class="p">[</span><span class="n">Data</span><span class="w"> </span><span class="n">Masking</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="n">PII</span><span class="w"> </span><span class="n">em</span><span class="w"> </span><span class="n">tickets</span><span class="o">/</span><span class="n">logs</span><span class="w"> </span><span class="p">(</span><span class="n">LGPD</span><span class="p">)]</span>
+<span class="w">    </span><span class="n">end</span>
+
+<span class="w">    </span><span class="n">subgraph</span><span class="w"> </span><span class="n">Runtime</span><span class="p">[</span><span class="s2">"Runtime"</span><span class="p">]</span>
+<span class="w">        </span><span class="n">NS</span><span class="p">[</span><span class="n">Namespace</span><span class="w"> </span><span class="n">K8s</span><span class="w"> </span><span class="n">por</span><span class="w"> </span><span class="n">org</span><span class="o">/</span><span class="n">env</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="n">Resource</span><span class="w"> </span><span class="n">quotas</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">NetworkPolicy</span><span class="p">]</span>
+<span class="w">        </span><span class="n">PSP</span><span class="p">[</span><span class="n">Pod</span><span class="w"> </span><span class="n">Security</span><span class="w"> </span><span class="n">Standards</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="n">Restricted</span><span class="p">]</span>
+<span class="w">        </span><span class="n">SA</span><span class="p">[</span><span class="n">Service</span><span class="w"> </span><span class="n">Accounts</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="n">Workload</span><span class="w"> </span><span class="n">Identity</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="n">IRSA</span><span class="p">]</span>
+<span class="w">        </span><span class="n">SCOPE</span><span class="p">[</span><span class="n">Tool</span><span class="o">-</span><span class="n">level</span><span class="w"> </span><span class="n">Scope</span><span class="w"> </span><span class="n">Enforcement</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="n">OPA</span><span class="w"> </span><span class="n">sidecar</span><span class="p">:</span><span class="w"> </span><span class="n">ticket</span><span class="o">.</span><span class="n">create</span><span class="w"> </span><span class="n">vs</span><span class="w"> </span><span class="n">ticket</span><span class="o">.</span><span class="n">read</span><span class="p">]</span>
+<span class="w">    </span><span class="n">end</span>
+
+<span class="w">    </span><span class="n">subgraph</span><span class="w"> </span><span class="n">Operational</span><span class="p">[</span><span class="s2">"Operational"</span><span class="p">]</span>
+<span class="w">        </span><span class="n">AUD</span><span class="p">[</span><span class="n">Audit</span><span class="w"> </span><span class="n">Logs</span><span class="w"> </span><span class="n">imutáveis</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="n">CloudTrail</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="n">Loki</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">S3</span><span class="w"> </span><span class="n">WORM</span><span class="p">]</span>
+<span class="w">        </span><span class="n">SIEM</span><span class="p">[</span><span class="n">Streaming</span><span class="w"> </span><span class="n">para</span><span class="w"> </span><span class="n">SIEM</span><span class="w"> </span><span class="n">cliente</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="p">(</span><span class="n">Splunk</span><span class="p">,</span><span class="w"> </span><span class="n">Datadog</span><span class="p">,</span><span class="w"> </span><span class="n">S3</span><span class="p">,</span><span class="w"> </span><span class="n">Elastic</span><span class="p">)]</span>
+<span class="w">        </span><span class="n">INC</span><span class="p">[</span><span class="n">Incident</span><span class="w"> </span><span class="n">Response</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="n">Runbooks</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">On</span><span class="o">-</span><span class="n">call</span><span class="p">]</span>
+<span class="w">        </span><span class="n">SCAN</span><span class="p">[</span><span class="n">Security</span><span class="w"> </span><span class="n">Scanning</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="n">FS</span><span class="w"> </span><span class="n">MCP</span><span class="w"> </span><span class="n">Server</span><span class="w"> </span><span class="n">image</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">deps</span><span class="p">]</span>
+<span class="w">        </span><span class="n">FS_AUDIT</span><span class="p">[</span><span class="n">Freshservice</span><span class="w"> </span><span class="n">Audit</span><span class="w"> </span><span class="n">Log</span><span class="w"> </span><span class="n">Sync</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="n">Correlação</span><span class="w"> </span><span class="n">MCP</span><span class="w"> </span><span class="err">↔</span><span class="w"> </span><span class="n">FS</span><span class="w"> </span><span class="n">nativo</span><span class="p">]</span>
+<span class="w">    </span><span class="n">end</span>
+
+<span class="w">    </span><span class="n">FW</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">VPC</span>
+<span class="w">    </span><span class="n">VPC</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">SG</span>
+<span class="w">    </span><span class="n">SG</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">MTLS</span>
+<span class="w">    </span><span class="n">MTLS</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">RLS</span>
+<span class="w">    </span><span class="n">RLS</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">FS_TOK</span>
+<span class="w">    </span><span class="n">FS_TOK</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">ENC</span>
+<span class="w">    </span><span class="n">ENC</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">TLS</span>
+<span class="w">    </span><span class="n">TLS</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">BKP</span>
+<span class="w">    </span><span class="n">NS</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">PSP</span>
+<span class="w">    </span><span class="n">PSP</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">SA</span>
+<span class="w">    </span><span class="n">SA</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">SCOPE</span>
+<span class="w">    </span><span class="n">MASK</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">SCOPE</span>
+<span class="w">    </span><span class="n">AUD</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">SIEM</span>
+<span class="w">    </span><span class="n">SIEM</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">INC</span>
+<span class="w">    </span><span class="n">SCAN</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">INC</span>
+<span class="w">    </span><span class="n">FS_AUDIT</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">INC</span>
+</code></pre></div>
+
+<h3 id="checklist-de-conformidade-lgpd-soc-2-type-ii-freshservice"><a class="toclink" href="#checklist-de-conformidade-lgpd-soc-2-type-ii-freshservice">Checklist de Conformidade (LGPD / SOC 2 Type II - Freshservice)</a><a class="headerlink" href="#checklist-de-conformidade-lgpd-soc-2-type-ii-freshservice" title="Permanent link">&para;</a></h3>
+<ul>
+<li>[ ] <strong>Data Processing Addendum (DPA)</strong> padrão + sub-processadores (Freshservice, Cloud, Vault) listados</li>
+<li>[ ] <strong>Right to be forgotten</strong> → API <code>DELETE /organizations/{org_id}/users/{userId}</code> + purge tokens Freshservice + job 30d</li>
+<li>[ ] <strong>Data Portability</strong> → Export JSON/CSV completo (configs, audit logs, tokens metadata) via Admin Console ou API</li>
+<li>[ ] <strong>Breach Notification</strong> &lt; 72h (processo documentado + templates) — inclui vazamento de tokens Freshservice</li>
+<li>[ ] <strong>Encryption Keys</strong> → AWS KMS / GCP KMS / HashiCorp Vault; rotação 90d; BYOK para Enterprise</li>
+<li>[ ] <strong>Pen Test</strong> anual + bug bounty (HackerOne/Intigriti) — foco em token leakage Freshservice</li>
+<li>[ ] <strong>SOC 2 Type II</strong> → Auditoria anual (Vanta/Drata para automação)</li>
+<li>[ ] <strong>ISO 27001</strong> alinhamento (políticas, gestão de riscos, continuidade)</li>
+<li>[ ] <strong>Data Residency</strong> → Regiões US/EU/BR aplicáveis via tier; tokens Freshservice nunca saem da região</li>
+<li>[ ] <strong>Freshservice API Compliance</strong> → Respeito a ToS, rate limits, data retention policies do Freshservice</li>
+</ul>
+<hr />
+<h2 id="13-bases-tecnicas-recomendadas-gatewayruntime-para-freshservice-mcp"><a class="toclink" href="#13-bases-tecnicas-recomendadas-gatewayruntime-para-freshservice-mcp">13. Bases Técnicas Recomendadas (Gateway/Runtime para Freshservice MCP)</a><a class="headerlink" href="#13-bases-tecnicas-recomendadas-gatewayruntime-para-freshservice-mcp" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Critério</th>
+<th><strong>Obot (Open Source)</strong></th>
+<th><strong>MintMCP</strong></th>
+<th><strong>Scalekit</strong></th>
+<th><strong>Custom (Go + MCP SDK)</strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Licença</strong></td>
+<td><strong>MIT (Open Source)</strong></td>
+<td>Proprietário</td>
+<td>Proprietário</td>
+<td>Própria</td>
+</tr>
+<tr>
+<td><strong>Arquitetura</strong></td>
+<td>K8s-native (Go + React)</td>
+<td>Gateway gerenciado (K8s)</td>
+<td>Gateway gerenciado + Auth stack</td>
+<td>Total controle</td>
+</tr>
+<tr>
+<td><strong>Multi-tenancy</strong></td>
+<td>Namespace K8s + Vault隔离</td>
+<td>Virtual MCP Bundles + TBAC</td>
+<td>Per-tenant isolation + Org model</td>
+<td>Custom (RLS/Namespace)</td>
+</tr>
+<tr>
+<td><strong>Auth</strong></td>
+<td>OIDC/OAuth2, device auth</td>
+<td>OAuth 2.0/2.1, SAML, OIDC, OBO</td>
+<td>OAuth 2.1, PKCE, CIMD, DCR, XAA</td>
+<td>Custom (qualquer)</td>
+</tr>
+<tr>
+<td><strong>Registry/Catalog</strong></td>
+<td>✅ MCP + Skills Registry</td>
+<td>❌ (não tem)</td>
+<td>❌ (usa Smithery/outros)</td>
+<td>Custom</td>
+</tr>
+<tr>
+<td><strong>STDIO Support</strong></td>
+<td>✅ Nativo (container sibling)</td>
+<td>✅ OAuth brokering</td>
+<td>✅ Via gateway</td>
+<td>Custom</td>
+</tr>
+<tr>
+<td><strong>Observabilidade</strong></td>
+<td>Audit logs + Metrics</td>
+<td>Agent Monitor (real-time)</td>
+<td>Logs + Metrics</td>
+<td>Custom (OpenTelemetry)</td>
+</tr>
+<tr>
+<td><strong>Freshservice Fit</strong></td>
+<td><strong>Alto</strong> — custom server como "Skill", gateway unificado</td>
+<td>Médio — precisa wrapper</td>
+<td>Médio — auth-first</td>
+<td><strong>Máximo</strong> — código próprio</td>
+</tr>
+<tr>
+<td><strong>Deploy</strong></td>
+<td><strong>Self-hosted K8s</strong> (Community) / Hosted (Cloud)</td>
+<td>SaaS + Self-hosted (Enterprise)</td>
+<td>SaaS + Private/self-hosted</td>
+<td>Qualquer</td>
+</tr>
+<tr>
+<td><strong>Preço</strong></td>
+<td><strong>Free (open source)</strong> + Hosted paid</td>
+<td>Enterprise sales-only</td>
+<td>Free 5 users → $99/mo → $10/user</td>
+<td>Custo infra + dev</td>
+</tr>
+<tr>
+<td><strong>Ideal para</strong></td>
+<td><strong>Data sovereignty, self-host, auditável, custom tools</strong></td>
+<td>Regulated enterprise, governance-first</td>
+<td>Dev-focused, auth-first, quick start</td>
+<td>Requisitos únicos, IP próprio, performance extrema</td>
+</tr>
+</tbody>
+</table>
+<h3 id="minha-recomendacao-obot-open-source-control-plane-proprio-freshservice-mcp-server-custom"><a class="toclink" href="#minha-recomendacao-obot-open-source-control-plane-proprio-freshservice-mcp-server-custom">Minha Recomendação: <strong>Obot (Open Source) + Control Plane Próprio + Freshservice MCP Server Custom</strong></a><a class="headerlink" href="#minha-recomendacao-obot-open-source-control-plane-proprio-freshservice-mcp-server-custom" title="Permanent link">&para;</a></h3>
+<blockquote>
+<ul>
+<li><strong>MIT License</strong> → zero vendor lock-in, auditable, customizável para tools Freshservice específicas</li>
+<li><strong>K8s-native</strong> → isolamento nativo via namespaces, NetworkPolicy, ResourceQuota por org/env</li>
+<li><strong>MCP + Skills Registry built-in</strong> → catálogo privado de versões do Freshservice MCP Server (e futuros)</li>
+<li><strong>Gateway unificado (MCP + LLM)</strong> → single endpoint para clientes</li>
+<li><strong>Auth flexível</strong> → OIDC/OAuth2, device flow, upstream credential isolation (Vault path per org/env)</li>
+<li><strong>Freshservice MCP Server</strong> → <strong>nosso código</strong> (Python/Go) como "Skill" no Obot ou container sidecar</li>
+<li><strong>Roadmap</strong>: oferecer <strong>Obot Community + FS MCP Server</strong> no tier Starter (self-service deploy via API) e <strong>Obot Cloud/Enterprise + FS MCP Server gerenciado</strong> nos tiers superiores (managed + SLA + features avançadas + connectors premium)</li>
+</ul>
+</blockquote>
+<hr />
+<h2 id="14-registry-catalog-strategy-freshservice-mcp-server-versions"><a class="toclink" href="#14-registry-catalog-strategy-freshservice-mcp-server-versions">14. Registry &amp; Catalog Strategy (Freshservice MCP Server Versions)</a><a class="headerlink" href="#14-registry-catalog-strategy-freshservice-mcp-server-versions" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><span class="n">flowchart</span><span class="w"> </span><span class="n">LR</span>
+<span class="w">    </span><span class="n">subgraph</span><span class="w"> </span><span class="n">Public</span><span class="p">[</span><span class="s">"Public Registry"</span><span class="p">]</span>
+<span class="w">        </span><span class="kr">OR</span><span class="p">[</span><span class="n">Official</span><span class="w"> </span><span class="n">MCP</span><span class="w"> </span><span class="n">Registry</span><span class="p">]</span>
+<span class="w">        </span><span class="n">SM</span><span class="p">[</span><span class="n">Smithery</span><span class="p">.</span><span class="n">ai</span><span class="p">]</span>
+<span class="w">        </span><span class="n">GL</span><span class="p">[</span><span class="n">Glama</span><span class="p">.</span><span class="n">ai</span><span class="p">]</span>
+<span class="w">    </span><span class="kd">end</span>
+
+<span class="w">    </span><span class="n">subgraph</span><span class="w"> </span><span class="n">Private</span><span class="p">[</span><span class="s">"Private Registry (Nossa Plataforma)"</span><span class="p">]</span>
+<span class="w">        </span><span class="n">PR</span><span class="p">[</span><span class="n">Private</span><span class="w"> </span><span class="n">Registry</span><span class="w"> </span><span class="n">API</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="p">(</span><span class="n">PostgreSQL</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">pgvector</span><span class="p">)]</span>
+<span class="w">        </span><span class="n">SC</span><span class="p">[</span><span class="n">Security</span><span class="w"> </span><span class="n">Scanner</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="p">(</span><span class="n">Syft</span><span class="o">/</span><span class="n">Grype</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">SBOM</span><span class="p">)]</span>
+<span class="w">        </span><span class="n">SG</span><span class="p">[</span><span class="n">Signing</span><span class="w"> </span><span class="o">&amp;</span><span class="w"> </span><span class="n">Attestation</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="p">(</span><span class="n">Cosign</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">Sigstore</span><span class="p">)]</span>
+<span class="w">        </span><span class="n">POL</span><span class="p">[</span><span class="n">Policy</span><span class="w"> </span><span class="n">Engine</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="p">(</span><span class="n">Allow</span><span class="o">/</span><span class="n">Deny</span><span class="o">/</span><span class="n">Quarantine</span><span class="p">)]</span>
+<span class="w">    </span><span class="kd">end</span>
+
+<span class="w">    </span><span class="n">subgraph</span><span class="w"> </span><span class="n">Tenant</span><span class="p">[</span><span class="s">"Tenant Catalog"</span><span class="p">]</span>
+<span class="w">        </span><span class="n">TC</span><span class="p">[</span><span class="n">Tenant</span><span class="w"> </span><span class="n">Allowlist</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="p">(</span><span class="n">Versões</span><span class="w"> </span><span class="n">FS</span><span class="w"> </span><span class="n">MCP</span><span class="w"> </span><span class="n">Server</span><span class="w"> </span><span class="n">aprovadas</span><span class="p">)]</span>
+<span class="w">        </span><span class="n">CUST</span><span class="p">[</span><span class="n">Custom</span><span class="w"> </span><span class="n">Tools</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="p">(</span><span class="n">Built</span><span class="w"> </span><span class="n">by</span><span class="w"> </span><span class="n">tenant</span><span class="o">:</span><span class="w"> </span><span class="n">workflows</span><span class="w"> </span><span class="n">custom</span><span class="p">)]</span>
+<span class="w">        </span><span class="n">VER</span><span class="p">[</span><span class="n">Version</span><span class="w"> </span><span class="n">Pinning</span><span class="o">&lt;</span><span class="n">br</span><span class="o">/&gt;</span><span class="p">(</span><span class="n">Immutable</span><span class="w"> </span><span class="n">refs</span><span class="o">:</span><span class="w"> </span><span class="n">sha256</span><span class="p">)]</span>
+<span class="w">    </span><span class="kd">end</span>
+
+<span class="w">    </span><span class="kr">OR</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">PR</span>
+<span class="w">    </span><span class="n">SM</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">PR</span>
+<span class="w">    </span><span class="n">GL</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">PR</span>
+<span class="w">    </span><span class="n">PR</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">SC</span>
+<span class="w">    </span><span class="n">SC</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">SG</span>
+<span class="w">    </span><span class="n">SG</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">POL</span>
+<span class="w">    </span><span class="n">POL</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">TC</span>
+<span class="w">    </span><span class="n">CUST</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">TC</span>
+<span class="w">    </span><span class="n">TC</span><span class="w"> </span><span class="o">--&gt;</span><span class="w"> </span><span class="n">VER</span>
+</code></pre></div>
+
+<h3 id="versionamento-do-freshservice-mcp-server"><a class="toclink" href="#versionamento-do-freshservice-mcp-server">Versionamento do Freshservice MCP Server</a><a class="headerlink" href="#versionamento-do-freshservice-mcp-server" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Versão</th>
+<th>Tools Incluídas</th>
+<th>Freshservice API Version</th>
+<th>Breaking Changes</th>
+<th>Status</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>v1.0.0</td>
+<td>tickets.<em>, assets.</em>, catalog.*</td>
+<td>v2</td>
+<td>—</td>
+<td>Stable</td>
+</tr>
+<tr>
+<td>v1.1.0</td>
+<td>+ changes.<em>, kb.</em></td>
+<td>v2</td>
+<td>—</td>
+<td>Stable</td>
+</tr>
+<tr>
+<td>v1.2.0</td>
+<td>+ cmdb.<em>, workflows.</em></td>
+<td>v2</td>
+<td>—</td>
+<td>Beta</td>
+</tr>
+<tr>
+<td>v2.0.0</td>
+<td>Refatoração tools, novos parâmetros</td>
+<td>v2</td>
+<td>Sim (inputSchema)</td>
+<td>Planejado</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="15-roadmap-de-implementacao-16-semanas-freshservice-mcp-platform"><a class="toclink" href="#15-roadmap-de-implementacao-16-semanas-freshservice-mcp-platform">15. Roadmap de Implementação (16 Semanas - Freshservice MCP Platform)</a><a class="headerlink" href="#15-roadmap-de-implementacao-16-semanas-freshservice-mcp-platform" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><span class="n">gantt</span>
+<span class="w">    </span><span class="n">title</span><span class="w"> </span><span class="n">Roadmap</span><span class="w"> </span><span class="n">Freshservice</span><span class="w"> </span><span class="n">MCP</span><span class="w"> </span><span class="n">Platform</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="mi">16</span><span class="w"> </span><span class="n">Semanas</span>
+<span class="w">    </span><span class="n">dateFormat</span><span class="w">  </span><span class="n">YYYY</span><span class="o">-</span><span class="n">MM</span><span class="o">-</span><span class="n">DD</span>
+<span class="w">    </span><span class="n">axisFormat</span><span class="w">  </span><span class="o">%</span><span class="n">d</span><span class="o">/%</span><span class="n">m</span>
+<span class="w">    </span><span class="n">todayMarker</span><span class="w"> </span><span class="n">stroke</span><span class="o">-</span><span class="nl">width</span><span class="p">:</span><span class="mi">2</span><span class="p">,</span><span class="nl">stroke</span><span class="p">:</span><span class="n">red</span>
+
+<span class="w">    </span><span class="k">section</span><span class="w"> </span><span class="n">Fundação</span><span class="w"> </span><span class="p">(</span><span class="n">VPS</span><span class="p">)</span>
+<span class="w">    </span><span class="n">Infra</span><span class="w"> </span><span class="n">Base</span><span class="w"> </span><span class="p">(</span><span class="n">Docker</span><span class="w"> </span><span class="nl">Compose</span><span class="p">:</span><span class="w"> </span><span class="n">PG</span><span class="p">,</span><span class="w"> </span><span class="n">Redis</span><span class="p">,</span><span class="w"> </span><span class="n">Kafka</span><span class="p">,</span><span class="w"> </span><span class="n">Vault</span><span class="p">,</span><span class="w"> </span><span class="n">Obs</span><span class="p">)</span><span class="w">     </span><span class="err">:</span><span class="n">a1</span><span class="p">,</span><span class="w"> </span><span class="mi">2025</span><span class="o">-</span><span class="mi">02</span><span class="o">-</span><span class="mi">03</span><span class="p">,</span><span class="w"> </span><span class="mi">14</span><span class="n">d</span>
+<span class="w">    </span><span class="n">Control</span><span class="w"> </span><span class="n">Plane</span><span class="w"> </span><span class="n">API</span><span class="w"> </span><span class="p">(</span><span class="n">CRUD</span><span class="w"> </span><span class="n">Orgs</span><span class="p">,</span><span class="w"> </span><span class="n">Envs</span><span class="p">,</span><span class="w"> </span><span class="n">Plans</span><span class="p">,</span><span class="w"> </span><span class="n">FS</span><span class="w"> </span><span class="n">Config</span><span class="p">)</span><span class="w">         </span><span class="err">:</span><span class="n">a2</span><span class="p">,</span><span class="w"> </span><span class="k">after</span><span class="w"> </span><span class="n">a1</span><span class="p">,</span><span class="w"> </span><span class="mi">14</span><span class="n">d</span>
+<span class="w">    </span><span class="n">Provisioning</span><span class="w"> </span><span class="n">Engine</span><span class="w"> </span><span class="p">(</span><span class="n">Temporal</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">Obot</span><span class="w"> </span><span class="n">Skill</span><span class="w"> </span><span class="n">Register</span><span class="p">)</span><span class="w">          </span><span class="err">:</span><span class="n">a3</span><span class="p">,</span><span class="w"> </span><span class="k">after</span><span class="w"> </span><span class="n">a2</span><span class="p">,</span><span class="w"> </span><span class="mi">21</span><span class="n">d</span>
+
+<span class="w">    </span><span class="k">section</span><span class="w"> </span><span class="n">Auth</span><span class="w"> </span><span class="o">&amp;</span><span class="w"> </span><span class="n">Gateway</span>
+<span class="w">    </span><span class="n">Obot</span><span class="w"> </span><span class="n">Standalone</span><span class="w"> </span><span class="n">Deploy</span><span class="w"> </span><span class="p">(</span><span class="n">Docker</span><span class="w"> </span><span class="n">Compose</span><span class="p">,</span><span class="w"> </span><span class="n">config</span><span class="w"> </span><span class="n">via</span><span class="w"> </span><span class="n">API</span><span class="p">)</span><span class="w">       </span><span class="err">:</span><span class="n">b1</span><span class="p">,</span><span class="w"> </span><span class="mi">2025</span><span class="o">-</span><span class="mi">02</span><span class="o">-</span><span class="mi">03</span><span class="p">,</span><span class="w"> </span><span class="mi">14</span><span class="n">d</span>
+<span class="w">    </span><span class="n">OAuth</span><span class="w"> </span><span class="mf">2.1</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">PKCE</span><span class="w"> </span><span class="n">Implementation</span><span class="w"> </span><span class="p">(</span><span class="n">Auth</span><span class="w"> </span><span class="n">Server</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">PRM</span><span class="p">)</span><span class="w">           </span><span class="err">:</span><span class="n">b2</span><span class="p">,</span><span class="w"> </span><span class="k">after</span><span class="w"> </span><span class="n">b1</span><span class="p">,</span><span class="w"> </span><span class="mi">14</span><span class="n">d</span>
+<span class="w">    </span><span class="n">Multi</span><span class="o">-</span><span class="n">env</span><span class="w"> </span><span class="n">Token</span><span class="w"> </span><span class="n">Vault</span><span class="w"> </span><span class="p">(</span><span class="n">Vault</span><span class="w"> </span><span class="n">paths</span><span class="w"> </span><span class="n">per</span><span class="w"> </span><span class="n">org</span><span class="o">/</span><span class="n">env</span><span class="p">)</span><span class="w">               </span><span class="err">:</span><span class="n">b3</span><span class="p">,</span><span class="w"> </span><span class="k">after</span><span class="w"> </span><span class="n">b2</span><span class="p">,</span><span class="w"> </span><span class="mi">10</span><span class="n">d</span>
+<span class="w">    </span><span class="n">SSO</span><span class="o">/</span><span class="n">SAML</span><span class="o">/</span><span class="n">SCIM</span><span class="w"> </span><span class="n">Integration</span><span class="w"> </span><span class="p">(</span><span class="n">Keycloak</span><span class="o">/</span><span class="n">Scalekit</span><span class="o">/</span><span class="n">Ory</span><span class="p">)</span><span class="w">             </span><span class="err">:</span><span class="n">b4</span><span class="p">,</span><span class="w"> </span><span class="k">after</span><span class="w"> </span><span class="n">b3</span><span class="p">,</span><span class="w"> </span><span class="mi">10</span><span class="n">d</span>
+
+<span class="w">    </span><span class="k">section</span><span class="w"> </span><span class="n">Freshservice</span><span class="w"> </span><span class="n">MCP</span><span class="w"> </span><span class="n">Server</span>
+<span class="w">    </span><span class="n">FS</span><span class="w"> </span><span class="n">MCP</span><span class="w"> </span><span class="n">Server</span><span class="w"> </span><span class="n">Core</span><span class="w"> </span><span class="p">(</span><span class="n">tickets</span><span class="p">,</span><span class="w"> </span><span class="n">assets</span><span class="p">,</span><span class="w"> </span><span class="k">catalog</span><span class="p">)</span><span class="w">                 </span><span class="err">:</span><span class="n">fs1</span><span class="p">,</span><span class="w"> </span><span class="k">after</span><span class="w"> </span><span class="n">a1</span><span class="p">,</span><span class="w"> </span><span class="mi">21</span><span class="n">d</span>
+<span class="w">    </span><span class="n">FS</span><span class="w"> </span><span class="n">MCP</span><span class="w"> </span><span class="n">Server</span><span class="w"> </span><span class="n">Extended</span><span class="w"> </span><span class="p">(</span><span class="n">changes</span><span class="p">,</span><span class="w"> </span><span class="n">kb</span><span class="p">,</span><span class="w"> </span><span class="n">cmdb</span><span class="p">,</span><span class="w"> </span><span class="n">workflows</span><span class="p">)</span><span class="w">         </span><span class="err">:</span><span class="n">fs2</span><span class="p">,</span><span class="w"> </span><span class="k">after</span><span class="w"> </span><span class="n">fs1</span><span class="p">,</span><span class="w"> </span><span class="mi">14</span><span class="n">d</span>
+<span class="w">    </span><span class="n">FS</span><span class="w"> </span><span class="n">OAuth</span><span class="w"> </span><span class="n">Integration</span><span class="w"> </span><span class="p">(</span><span class="n">refresh</span><span class="p">,</span><span class="w"> </span><span class="n">rate</span><span class="w"> </span><span class="k">limit</span><span class="w"> </span><span class="n">handling</span><span class="p">,</span><span class="w"> </span><span class="n">retry</span><span class="p">)</span><span class="w">    </span><span class="err">:</span><span class="n">fs3</span><span class="p">,</span><span class="w"> </span><span class="k">after</span><span class="w"> </span><span class="n">fs2</span><span class="p">,</span><span class="w"> </span><span class="mi">10</span><span class="n">d</span>
+<span class="w">    </span><span class="n">FS</span><span class="w"> </span><span class="n">MCP</span><span class="w"> </span><span class="n">Server</span><span class="w"> </span><span class="n">Tests</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="k">Load</span><span class="w"> </span><span class="n">Test</span><span class="w"> </span><span class="p">(</span><span class="mi">500</span><span class="w"> </span><span class="n">RPS</span><span class="w"> </span><span class="n">target</span><span class="p">)</span><span class="w">              </span><span class="err">:</span><span class="n">fs4</span><span class="p">,</span><span class="w"> </span><span class="k">after</span><span class="w"> </span><span class="n">fs3</span><span class="p">,</span><span class="w"> </span><span class="mi">7</span><span class="n">d</span>
+
+<span class="w">    </span><span class="k">section</span><span class="w"> </span><span class="n">Registry</span><span class="w"> </span><span class="o">&amp;</span><span class="w"> </span><span class="k">Catalog</span>
+<span class="w">    </span><span class="n">Private</span><span class="w"> </span><span class="n">Registry</span><span class="w"> </span><span class="n">API</span><span class="w"> </span><span class="p">(</span><span class="n">Metadata</span><span class="p">,</span><span class="w"> </span><span class="k">Search</span><span class="p">,</span><span class="w"> </span><span class="n">Vector</span><span class="p">)</span><span class="w">               </span><span class="err">:</span><span class="n">c1</span><span class="p">,</span><span class="w"> </span><span class="k">after</span><span class="w"> </span><span class="n">a2</span><span class="p">,</span><span class="w"> </span><span class="mi">14</span><span class="n">d</span>
+<span class="w">    </span><span class="n">Security</span><span class="w"> </span><span class="n">Scanner</span><span class="w"> </span><span class="n">Pipeline</span><span class="w"> </span><span class="p">(</span><span class="n">CI</span><span class="o">/</span><span class="n">CD</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">Admission</span><span class="w"> </span><span class="n">Controller</span><span class="p">)</span><span class="w">      </span><span class="err">:</span><span class="n">c2</span><span class="p">,</span><span class="w"> </span><span class="k">after</span><span class="w"> </span><span class="n">c1</span><span class="p">,</span><span class="w"> </span><span class="mi">10</span><span class="n">d</span>
+<span class="w">    </span><span class="n">Signing</span><span class="w"> </span><span class="o">&amp;</span><span class="w"> </span><span class="n">Attestation</span><span class="w"> </span><span class="p">(</span><span class="n">Cosign</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">Policy</span><span class="p">)</span><span class="w">                       </span><span class="err">:</span><span class="n">c3</span><span class="p">,</span><span class="w"> </span><span class="k">after</span><span class="w"> </span><span class="n">c2</span><span class="p">,</span><span class="w"> </span><span class="mi">7</span><span class="n">d</span>
+<span class="w">    </span><span class="n">Tenant</span><span class="w"> </span><span class="k">Catalog</span><span class="w"> </span><span class="n">UI</span><span class="w"> </span><span class="p">(</span><span class="k">Admin</span><span class="w"> </span><span class="n">Console</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">CLI</span><span class="p">)</span><span class="w">                       </span><span class="err">:</span><span class="n">c4</span><span class="p">,</span><span class="w"> </span><span class="k">after</span><span class="w"> </span><span class="n">c3</span><span class="p">,</span><span class="w"> </span><span class="mi">10</span><span class="n">d</span>
+
+<span class="w">    </span><span class="k">section</span><span class="w"> </span><span class="n">Billing</span><span class="w"> </span><span class="o">&amp;</span><span class="w"> </span><span class="n">Ops</span>
+<span class="w">    </span><span class="n">Stripe</span><span class="w"> </span><span class="n">Integration</span><span class="w"> </span><span class="p">(</span><span class="n">Subs</span><span class="p">,</span><span class="w"> </span><span class="n">Metering</span><span class="p">,</span><span class="w"> </span><span class="n">Portal</span><span class="p">,</span><span class="w"> </span><span class="n">x402</span><span class="p">)</span><span class="w">             </span><span class="err">:</span><span class="n">d1</span><span class="p">,</span><span class="w"> </span><span class="k">after</span><span class="w"> </span><span class="n">a3</span><span class="p">,</span><span class="w"> </span><span class="mi">14</span><span class="n">d</span>
+<span class="w">    </span><span class="k">Usage</span><span class="w"> </span><span class="n">Pipeline</span><span class="w"> </span><span class="p">(</span><span class="n">Kafka</span><span class="w"> </span><span class="err">→</span><span class="w"> </span><span class="n">ClickHouse</span><span class="w"> </span><span class="err">→</span><span class="w"> </span><span class="n">Stripe</span><span class="w"> </span><span class="n">Meter</span><span class="p">)</span><span class="w">            </span><span class="err">:</span><span class="n">d2</span><span class="p">,</span><span class="w"> </span><span class="k">after</span><span class="w"> </span><span class="n">d1</span><span class="p">,</span><span class="w"> </span><span class="mi">10</span><span class="n">d</span>
+<span class="w">    </span><span class="k">Admin</span><span class="w"> </span><span class="n">Console</span><span class="w"> </span><span class="p">(</span><span class="n">React</span><span class="p">,</span><span class="w"> </span><span class="n">RBAC</span><span class="p">,</span><span class="w"> </span><span class="n">Audit</span><span class="w"> </span><span class="n">Logs</span><span class="p">,</span><span class="w"> </span><span class="n">Billing</span><span class="p">)</span><span class="w">              </span><span class="err">:</span><span class="n">d3</span><span class="p">,</span><span class="w"> </span><span class="k">after</span><span class="w"> </span><span class="n">d1</span><span class="p">,</span><span class="w"> </span><span class="mi">21</span><span class="n">d</span>
+
+<span class="w">    </span><span class="k">section</span><span class="w"> </span><span class="n">Hardening</span>
+<span class="w">    </span><span class="n">mTLS</span><span class="p">,</span><span class="w"> </span><span class="n">Network</span><span class="w"> </span><span class="n">Policies</span><span class="p">,</span><span class="w"> </span><span class="n">WAF</span><span class="p">,</span><span class="w"> </span><span class="n">Pen</span><span class="w"> </span><span class="n">Test</span><span class="w">                         </span><span class="err">:</span><span class="n">e1</span><span class="p">,</span><span class="w"> </span><span class="k">after</span><span class="w"> </span><span class="n">b4</span><span class="p">,</span><span class="w"> </span><span class="mi">14</span><span class="n">d</span>
+<span class="w">    </span><span class="n">Disaster</span><span class="w"> </span><span class="n">Recovery</span><span class="w"> </span><span class="n">Drill</span><span class="w"> </span><span class="p">(</span><span class="n">RPO</span><span class="o">/</span><span class="n">RTO</span><span class="p">,</span><span class="w"> </span><span class="n">Chaos</span><span class="w"> </span><span class="n">Engineering</span><span class="p">)</span><span class="w">          </span><span class="err">:</span><span class="n">e2</span><span class="p">,</span><span class="w"> </span><span class="k">after</span><span class="w"> </span><span class="n">e1</span><span class="p">,</span><span class="w"> </span><span class="mi">10</span><span class="n">d</span>
+<span class="w">    </span><span class="n">Docs</span><span class="w"> </span><span class="n">SDKs</span><span class="w"> </span><span class="p">(</span><span class="n">TS</span><span class="p">,</span><span class="w"> </span><span class="n">Python</span><span class="p">,</span><span class="w"> </span><span class="k">Go</span><span class="p">)</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">Onboarding</span><span class="w"> </span><span class="n">Flow</span><span class="w">                  </span><span class="err">:</span><span class="n">e3</span><span class="p">,</span><span class="w"> </span><span class="k">after</span><span class="w"> </span><span class="n">d3</span><span class="p">,</span><span class="w"> </span><span class="mi">10</span><span class="n">d</span>
+
+<span class="w">    </span><span class="k">section</span><span class="w"> </span><span class="n">Launch</span>
+<span class="w">    </span><span class="n">Beta</span><span class="w"> </span><span class="n">Privado</span><span class="w"> </span><span class="p">(</span><span class="mi">5</span><span class="o">-</span><span class="mi">10</span><span class="w"> </span><span class="n">design</span><span class="w"> </span><span class="n">partners</span><span class="w"> </span><span class="n">Freshservice</span><span class="p">)</span><span class="w">              </span><span class="err">:</span><span class="n">f1</span><span class="p">,</span><span class="w"> </span><span class="k">after</span><span class="w"> </span><span class="n">e2</span><span class="p">,</span><span class="w"> </span><span class="mi">14</span><span class="n">d</span>
+<span class="w">    </span><span class="n">GA</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="k">Public</span><span class="w"> </span><span class="n">Pricing</span><span class="w"> </span><span class="n">Page</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">Marketplace</span><span class="w">                        </span><span class="err">:</span><span class="n">f2</span><span class="p">,</span><span class="w"> </span><span class="k">after</span><span class="w"> </span><span class="n">f1</span><span class="p">,</span><span class="w"> </span><span class="mi">14</span><span class="n">d</span>
+</code></pre></div>
+
+<h3 id="marcos-entregaveis-freshservice"><a class="toclink" href="#marcos-entregaveis-freshservice">Marcos &amp; Entregáveis (Freshservice)</a><a class="headerlink" href="#marcos-entregaveis-freshservice" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Semana</th>
+<th>Marco</th>
+<th>Entregável</th>
+<th>Critério de Sucesso</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>2</td>
+<td><strong>Infra Pronta (VPS)</strong></td>
+<td>Docker Compose: PG + Redis + Kafka + Vault + Grafana/Loki/Tempo</td>
+<td><code>docker compose ps</code> healthy, backups testados</td>
+</tr>
+<tr>
+<td>4</td>
+<td><strong>Control Plane API</strong></td>
+<td>CRUD Orgs/Envs/Plans + Provisioning Engine (Temporal)</td>
+<td>Cria org+2 envs em &lt; 60s via API</td>
+</tr>
+<tr>
+<td>6</td>
+<td><strong>FS MCP Server Core</strong></td>
+<td>Tools tickets.<em>, assets.</em>, catalog.* + OAuth refresh automático</td>
+<td>100% tests pass, latência p95 &lt; 200ms vs FS API</td>
+</tr>
+<tr>
+<td>8</td>
+<td><strong>Obot + Skill Register</strong></td>
+<td>Obot expõe endpoint por env; skill registration automatizado</td>
+<td>10 tenants de teste provisionados end-to-end</td>
+</tr>
+<tr>
+<td>10</td>
+<td><strong>Auth Funcional</strong></td>
+<td>OAuth 2.1 + PKCE + PRM + JWKS + token refresh FS + revogação</td>
+<td>Cypress suite &gt; 90% pass, latência p95 &lt; 150ms</td>
+</tr>
+<tr>
+<td>12</td>
+<td><strong>Registry Live</strong></td>
+<td>Private registry com scan, sign, policy, tenant allowlist</td>
+<td>5 versões FS MCP Server publicadas, 0 vuln críticas</td>
+</tr>
+<tr>
+<td>14</td>
+<td><strong>Billing Live</strong></td>
+<td>Stripe cobra base + overage tool-calls (por tool FS/env) + portal</td>
+<td>Fatura correta para 10 tenants simulados 30 dias</td>
+</tr>
+<tr>
+<td>16</td>
+<td><strong>Hardened (VPS)</strong></td>
+<td>mTLS CP↔DP, WAF, Pen Test limpo, DR validado</td>
+<td>Relatório pen test sem críticos, RTO &lt; 4h</td>
+</tr>
+<tr>
+<td>20</td>
+<td><strong>Beta → GA</strong></td>
+<td>5 design partners FS em produção, docs SDKs, pricing público</td>
+<td>NPS &gt; 45, churn 0, MRR target atingido</td>
+</tr>
+<tr>
+<td>24+</td>
+<td><strong>K8s Migration</strong></td>
+<td>Helm charts, ArgoCD, HA Vault, Cloud SQL, Ingress</td>
+<td>Zero-downtime migration, custos &lt; 30% aumento</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="16-referencias-fontes-freshservice-mcp"><a class="toclink" href="#16-referencias-fontes-freshservice-mcp">16. Referências &amp; Fontes (Freshservice + MCP)</a><a class="headerlink" href="#16-referencias-fontes-freshservice-mcp" title="Permanent link">&para;</a></h2>
+<h3 id="especificacao-documentacao-oficial"><a class="toclink" href="#especificacao-documentacao-oficial">Especificação &amp; Documentação Oficial</a><a class="headerlink" href="#especificacao-documentacao-oficial" title="Permanent link">&para;</a></h3>
+<ul>
+<li><a href="https://modelcontextprotocol.io/docs/2026-07-28/learn/architecture">Model Context Protocol Specification</a> — Arquitetura, transports, auth</li>
+<li><a href="https://modelcontextprotocol.io/docs/2026-07-28/tutorials/security/authorization">MCP Authorization Spec</a> — OAuth 2.1, PKCE, PRM</li>
+<li><a href="https://api.freshservice.com/#introduction">Freshservice API v2 Documentation</a> — REST API, OAuth, rate limits, webhooks</li>
+<li><a href="https://developers.freshservice.com/oauth/">Freshservice OAuth 2.0 Guide</a> — Configuração OAuth App, scopes, refresh tokens</li>
+<li><a href="https://developers.freshservice.com/api/workflow_engine/">Freshservice Workflow Engine API</a> — Workflows, execuções, triggers</li>
+</ul>
+<h3 id="plataformas-gateways-analise-comparativa"><a class="toclink" href="#plataformas-gateways-analise-comparativa">Plataformas &amp; Gateways (Análise Comparativa)</a><a class="headerlink" href="#plataformas-gateways-analise-comparativa" title="Permanent link">&para;</a></h3>
+<ul>
+<li><a href="https://docs.obot.ai/concepts/architecture">Obot Platform</a> — Open source, K8s-native, MCP + Skills registry</li>
+<li><a href="https://www.mintmcp.com/docs/authentication-models">MintMCP Authentication Models</a> — Per-user, shared, hybrid, OBO</li>
+<li><a href="https://www.scalekit.com/blog-category/mcp-authentication">Scalekit MCP Auth</a> — CIMD, DCR, XAA, enterprise SSO</li>
+<li><a href="https://www.truefoundry.com/docs/ai-gateway/mcp/mcp-overview">TrueFoundry MCP Gateway</a> — Registry, virtual servers, guardrails</li>
+<li><a href="https://composio.dev/content/mcp-authentication-enterprise-teams">Composio MCP Authentication</a> — Per-user OAuth, vault, refresh</li>
+</ul>
+<h3 id="artigos-tecnicos-benchmarks"><a class="toclink" href="#artigos-tecnicos-benchmarks">Artigos Técnicos &amp; Benchmarks</a><a class="headerlink" href="#artigos-tecnicos-benchmarks" title="Permanent link">&para;</a></h3>
+<ul>
+<li><a href="https://stackoverflow.blog/2026/01/21/is-that-allowed-authentication-and-authorization-in-model-context-protocol">Stack Overflow: Auth in MCP</a> — STDIO vs Streamable HTTP</li>
+<li><a href="https://medium.com/@wadahiro/protecting-mcp-server-with-oauth-2-1-a-practical-guide-using-go-and-keycloak-7544eb5379d3">Protecting MCP with OAuth 2.1 (Go + Keycloak)</a></li>
+<li><a href="https://usagebox.com/articles/how-to-charge-for-mcp-server-2026-per-call-subscription-x402">MCP Server Billing Models</a> — Per-call, subscription, freemium, outcome</li>
+<li><a href="https://www.merge.dev/blog/hosted-mcp-platforms">Hosted MCP Platforms Comparison</a> — Arcade, Composio, etc.</li>
+</ul>
+<h3 id="compliance-security"><a class="toclink" href="#compliance-security">Compliance &amp; Security</a><a class="headerlink" href="#compliance-security" title="Permanent link">&para;</a></h3>
+<ul>
+<li><a href="https://www.gov.br/anpd/pt-br/assuntos/guias-e-cartilhas">LGPD Guia Prático (ANPD)</a></li>
+<li><a href="https://www.vanta.com/soc-2-checklist">SOC 2 Type II Checklist</a></li>
+<li><a href="https://cheatsheetseries.owasp.org/cheatsheets/Authentication_Cheat_Sheet.html">OWASP Authentication Cheat Sheet</a></li>
+<li><a href="https://datatracker.ietf.org/doc/html/rfc9728">RFC 9728 - OAuth 2.0 Protected Resource Metadata</a></li>
+<li><a href="https://datatracker.ietf.org/doc/html/rfc8693">RFC 8693 - OAuth 2.0 Token Exchange (OBO)</a></li>
+</ul>
+<h3 id="ferramentas-de-apoio"><a class="toclink" href="#ferramentas-de-apoio">Ferramentas de Apoio</a><a class="headerlink" href="#ferramentas-de-apoio" title="Permanent link">&para;</a></h3>
+<ul>
+<li><a href="https://github.com/obot-platform/obot">Obot GitHub</a> — MIT licensed, K8s operator</li>
+<li><a href="https://github.com/modelcontextprotocol">MCP SDKs</a> — Python, TypeScript, Go, Rust</li>
+<li><a href="https://temporal.io/">Temporal</a> — Provisioning workflows duráveis</li>
+<li><a href="https://www.openpolicyagent.org/">OpenPolicyAgent</a> — AuthZ (TBAC/RBAC)</li>
+<li><a href="https://docs.sigstore.dev/">Cosign/Sigstore</a> — Signing &amp; verification</li>
+<li><a href="https://www.getlago.com/">Lago</a> / <a href="https://openmeter.io/">OpenMeter</a> — Open-source billing/metering</li>
+<li><a href="https://turbo.build/repo">Turborepo</a> / <a href="https://nx.dev/">Nx</a> — Monorepo tooling</li>
+</ul>
+<hr />
+<h2 id="17-proximos-passos-imediatos-esta-semana-freshservice-mcp-em-vps"><a class="toclink" href="#17-proximos-passos-imediatos-esta-semana-freshservice-mcp-em-vps">17. Próximos Passos Imediatos (Esta Semana - Freshservice MCP em VPS)</a><a class="headerlink" href="#17-proximos-passos-imediatos-esta-semana-freshservice-mcp-em-vps" title="Permanent link">&para;</a></h2>
+<ol>
+<li><strong>Provisionar VPS</strong> (Hetzner CX42 / DigitalOcean 8GB / AWS t3.medium) → Docker + Compose (arquivo acima).</li>
+<li><strong>Deploy Obot Community</strong> via Docker Compose → validar gateway MCP + Skills Registry + auth flow.</li>
+<li><strong>Desenvolver Freshservice MCP Server v1.0.0</strong> (Python + FastMCP ou Go + MCP SDK):</li>
+<li>Tools: <code>ticket.create</code>, <code>ticket.get</code>, <code>ticket.list</code>, <code>ticket.update</code>, <code>asset.create</code>, <code>asset.list</code>, <code>service_catalog.list</code>, <code>workflow.list</code>, <code>workflow.trigger</code>, <code>workflow.get_execution</code></li>
+<li>OAuth 2.0 client com refresh token automático + rate limit handling (429 retry com backoff)</li>
+<li>Containerizado, health checks, structured logging (JSON), métricas Prometheus</li>
+<li><strong>Escrever Provisioning Engine</strong> (Go/TS + Temporal) que: cria schema PG <code>org_{id}_{env}</code>, cria path Vault <code>secret/org/{id}/{env}/fs-oauth</code>, registra Skill + SkillInstance no Obot via API, configura nginx subdomínio (<code>{org}-{env}.mcp.seudominio.com</code>), emite <code>environment.ready</code> webhook.</li>
+<li><strong>Definir schema de billing</strong> no Stripe (products, prices, meters <code>tool_calls</code> com labels <code>tool_name=ticket.create|workflow.trigger...</code>, <code>org_id</code>, <code>env_id</code>) + webhook <code>invoice.payment_succeeded</code> → libera features/quotas.</li>
+<li><strong>Montar repo <code>mcp-control-plane</code></strong> (monorepo: <code>apps/control-plane-api</code>, <code>apps/admin-console</code>, <code>apps/provisioning-engine</code>, <code>packages/shared-types</code>, <code>infra/</code>) com CI/CD (GitHub Actions + Turborepo).</li>
+<li><strong>Criar repos <code>fs-mcp-server</code></strong> (independente) com CI que publica imagem + <code>mcp-manifest.json</code> assinado no Registry privado.</li>
+<li><strong>Agendar 2h com 3-5 design partners</strong> (MSPs, consultorias ITSM, TI enterprise) para validar: pricing, auth requirements (SSO/SAML/SCIM), data residency, connector wishlist (Jira, Azure DevOps, Slack, Teams), SLA expectations, ferramentas Freshservice mais usadas.</li>
+<li><strong>Prototipar 2 MCP Servers custom adicionais</strong> (ex: PostgreSQL readonly para relatórios, n8n workflow executor) em repos próprios para testar provisioning + registry + gateway end-to-end além do core Freshservice.</li>
+</ol>
+<hr />
+<p><em>Documento gerado em 2025-01-25 — Versão 2.0 (Freshservice Focus + VPS + Multi-MCP Strategy)</em><br />
+<em>Próxima revisão: após validação com design partners (Semana 4)</em></p>
