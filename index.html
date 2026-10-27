@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MCP Platform Research</title>
+    <link rel="stylesheet" href="https://sdk.openui5.org/1.120.0/resources/sap/ui/core/themes/sap_fiori_3/library.css">
+    <script id="sap-ui-bootstrap"
+            src="https://sdk.openui5.org/1.120.0/resources/sap-ui-core.js"
+            data-sap-ui-theme="sap_fiori_3"
+            data-sap-ui-libs="sap.m, sap.ui.layout, sap.ui.core"
+            data-sap-ui-compatVersion="edge"
+            data-sap-ui-async="true"
+            data-sap-ui-oninit="module:app/main">
+    </script>
+    <style>
+        .sapUiBody { background: #f4f4f4; }
+        .customShell { height: 100vh; }
+        .tileContainer { padding: 2rem; }
+        .tileWrapper { display: flex; flex-wrap: wrap; gap: 1.5rem; justify-content: center; max-width: 1200px; margin: 0 auto; }
+        .headerBar { background: #1d3459; color: white; padding: 1rem 2rem; }
+        .headerTitle { font-size: 1.5rem; font-weight: 300; }
+        .headerSubtitle { font-size: 0.875rem; opacity: 0.8; margin-top: 0.25rem; }
+        .sectionTitle { color: #1d3459; font-size: 1.125rem; font-weight: 600; margin-bottom: 1rem; padding-left: 0.5rem; border-left: 4px solid #0070f2; }
+        .sapMCustomTile { box-shadow: 0 1px 3px rgba(0,0,0,0.12), 0 1px 2px rgba(0,0,0,0.24); transition: all 0.2s ease; }
+        .sapMCustomTile:hover { box-shadow: 0 4px 8px rgba(0,0,0,0.16), 0 2px 4px rgba(0,0,0,0.24); transform: translateY(-2px); }
+        .tileIcon { font-size: 2.5rem; color: #0070f2; margin-bottom: 0.5rem; }
+        .tileTitle { font-size: 1rem; font-weight: 600; color: #1d3459; margin-bottom: 0.25rem; }
+        .tileDesc { font-size: 0.875rem; color: #6b6b6b; }
+        .footerBar { background: #f4f4f4; border-top: 1px solid #d9d9d9; padding: 1rem 2rem; text-align: center; color: #6b6b6b; font-size: 0.75rem; }
+    </style>
+</head>
+<body class="sapUiBody" role="application">
+    <div class="customShell">
+        <header class="headerBar" role="banner">
+            <div class="headerTitle">MCP Platform Research</div>
+            <div class="headerSubtitle">Model Context Protocol — Pesquisa e Documentação Técnica</div>
+        </header>
+
+        <main class="tileContainer" role="main">
+            <div class="tileWrapper">
+                <section>
+                    <div class="sectionTitle">Documentação Principal</div>
+                    <div class="tileWrapper" id="mainDocs"></div>
+                </section>
+
+                <section style="margin-top: 2.5rem;">
+                    <div class="sectionTitle">Arquivos de Apoio</div>
+                    <div class="tileWrapper" id="supportFiles"></div>
+                </section>
+            </div>
+        </main>
+
+        <footer class="footerBar" role="contentinfo">
+            <span>Repositório: edmaker89/mcp-research &nbsp;|&nbsp; GitHub Pages &nbsp;|&nbsp; Última atualização: <span id="lastUpdate"></span></span>
+        </footer>
+    </div>
+
+    <script>
+        sap.ui.define([
+            "sap/m/GenericTile",
+            "sap/m/TileContent",
+            "sap/ui/core/Icon",
+            "sap/m/Link",
+            "sap/ui/layout/VerticalLayout"
+        ], function(GenericTile, TileContent, Icon, Link, VerticalLayout) {
+            "use strict";
+
+            const mainDocs = [
+                {
+                    title: "Pesquisa Principal",
+                    desc: "Documento completo em Markdown com visão geral, arquitetura e descobertas",
+                    icon: "sap-icon://document-text",
+                    href: "research/mcp-platform/mcp-platform-research.md",
+                    color: "#0070f2"
+                },
+                {
+                    title: "Pesquisa Completa (HTML)",
+                    desc: "Versão HTML completa da pesquisa com formatação rica",
+                    icon: "sap-icon://html5",
+                    href: "research/mcp-platform/mcp-platform-research.html",
+                    color: "#0070f2"
+                }
+            ];
+
+            const supportFiles = [
+                {
+                    title: "Corpo da Pesquisa",
+                    desc: "Conteúdo principal extraído (HTML)",
+                    icon: "sap-icon://detail-view",
+                    href: "research/mcp-platform/mcp-platform-body.html",
+                    color: "#107e3e"
+                },
+                {
+                    title: "Versão Intermediária",
+                    desc: "Rascunho intermediário da pesquisa (HTML)",
+                    icon: "sap-icon://edit",
+                    href: "research/mcp-platform/mcp-platform-research-intermediate.html",
+                    color: "#107e3e"
+                },
+                {
+                    title: "Sumário (TOC)",
+                    desc: "Índice e estrutura de navegação",
+                    icon: "sap-icon://list",
+                    href: "research/mcp-platform/mcp-platform-toc.html",
+                    color: "#107e3e"
+                }
+            ];
+
+            function createTile(item) {
+                return new GenericTile({
+                    header: item.title,
+                    subheader: "",
+                    frameType: "TwoByOne",
+                    press: function() { window.open(item.href, "_blank"); },
+                    tileContent: new TileContent({
+                        footer: item.desc,
+                        content: new Icon({
+                            src: item.icon,
+                            size: "2.5rem",
+                            color: item.color
+                        })
+                    })
+                }).addStyleClass("sapMCustomTile").addStyleClass("sapUiSmallMarginEnd").addStyleClass("sapUiSmallMarginBottom");
+            }
+
+            const mainContainer = document.getElementById("mainDocs");
+            const supportContainer = document.getElementById("supportFiles");
+
+            mainDocs.forEach(item => {
+                const tile = createTile(item);
+                tile.placeAt(mainContainer);
+            });
+
+            supportFiles.forEach(item => {
+                const tile = createTile(item);
+                tile.placeAt(supportContainer);
+            });
+
+            document.getElementById("lastUpdate").textContent = new Date().toLocaleDateString("pt-BR");
+        });
+    </script>
+</body>
+</html>
